@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="sidebar-logo">IQ</div>
+        <nav class="sidebar-nav">
+            <a href="/dashboard.html" class="sidebar-nav-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                <span>Dashboard</span>
+            </a>
+            <a href="/setup.html" class="sidebar-nav-item active">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+                <span>Setup</span>
+            </a>
+            <a href="/users.html" class="sidebar-nav-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                <span>Users</span>
+            </a>
+            <a href="/about.html" class="sidebar-nav-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                <span>About</span>
+            </a>
+        </nav>
+        <div class="sidebar-footer">
+            <span class="product" id="sidebar-product"></span>
+            <span class="version" id="sidebar-version"></span>
+        </div>
+    </aside>
+
+    <div class="app-main">
+        <header class="app-header">
+            <div class="app-header-title">
+                <h1>Setup</h1>
+                <p>Network, blinds, and log configuration</p>
+            </div>
+            <div class="app-header-actions">
+                <span class="hostname-chip" id="topbar-hostname"></span>
+                <span class="user-chip" id="whoami"></span>
+                <button class="icon-button" id="logout-button" title="Sign out">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                </button>
+            </div>
+        </header>
+
+        <main class="setup-main">
+            <div class="tabs-bar">
+                <div class="tabs" id="tabs"></div>
+                <div class="tabs-actions">
+                    <span class="setup-status" id="save-status"></span>
+                    <button id="save-all-button" disabled>Save changes</button>
+                </div>
+            </div>
+            <div id="panels"></div>
+        </main>
+    </div>
+</div>
+
+<script src="/notifications.js"></script>
+<script>
+(function () {
+    // Field-driven sections, saved together by the "Save changes" button -
+    // one POST per section to /api/settings. Configuration is deliberately
+    // separate: it acts immediately, not part of that batch. User accounts
+    // are managed entirely on their own page (users.html), like DeviceIQ.
+    const SECTIONS = [
+        {
+            id: "Network", title: "Network",
+            desc: "Wireless connection and fallback access point.",
+            note: "Changes require a restart.",
+            groups: [
+                {
+                    title: "General",
+                    fields: [
+                        { key: "DHCP Client", label: "DHCP Client", desc: "Obtain IP configuration automatically from the network.", type: "bool" },
+                        { key: "Hostname", label: "Hostname", desc: "Device name advertised on the network.", type: "text" },
+                        { key: "IP Address", label: "IP Address", desc: "Static IP address. Ignored when DHCP Client is on.", type: "text", dhcpBound: true, liveKey: "Current IP" },
+                        { key: "Gateway", label: "Gateway", desc: "Static gateway address. Ignored when DHCP Client is on.", type: "text", dhcpBound: true, liveKey: "Current Gateway" },
+                        { key: "Netmask", label: "Netmask", desc: "Static subnet mask. Ignored when DHCP Client is on.", type: "text", dhcpBound: true, liveKey: "Current Netmask" },
+                        { key: "DNS 1", label: "DNS 1", desc: "Primary DNS server.", type: "text" },
+                        { key: "DNS 2", label: "DNS 2", desc: "Secondary DNS server.", type: "text" }
+                    ]
+                },
+                {
+                    title: "WiFi",
+                    fields: [
+                        { key: "SSID", label: "SSID", desc: "WiFi network name to connect to.", type: "text" },
+                        { key: "Passphrase", label: "Passphrase", desc: "WiFi password.", type: "text" },
+                        { key: "Connection Timeout", label: "Connection Timeout", desc: "Seconds to wait for a WiFi connection before falling back.", type: "number", min: 1, max: 255 },
+                        { key: "Reconnect Enabled", label: "Reconnect Enabled", desc: "Automatically retry the connection when WiFi drops.", type: "bool" },
+                        { key: "Reconnect Initial Interval", label: "Reconnect Initial Interval", desc: "Seconds before the first reconnect attempt. Stored for a future release; not yet applied.", type: "number", min: 1, max: 65535 },
+                        { key: "Reconnect Maximum Interval", label: "Reconnect Maximum Interval", desc: "Upper bound for the reconnect backoff delay. Stored for a future release; not yet applied.", type: "number", min: 1, max: 65535 }
+                    ]
+                },
+                {
+                    title: "Fallback AP",
+                    fields: [
+                        { key: "Fallback AP Enabled", label: "Fallback AP Enabled", desc: "Start a local access point when WiFi is unavailable.", type: "bool" },
+                        { key: "Fallback AP SSID", label: "Fallback AP SSID", desc: "Access point name. Empty uses the device hostname.", type: "text" },
+                        { key: "Fallback AP Password", label: "Fallback AP Password", desc: "Access point password.", type: "text" },
+                        { key: "Fallback AP Retention", label: "Fallback AP Retention", desc: "Seconds to keep the fallback AP running after WiFi reconnects. Stored for a future release; not yet applied.", type: "number", min: 0, max: 65535 }
+                    ]
+                },
+                {
+                    title: "Web Server",
+                    fields: [
+                        { key: "HTTP Port", label: "HTTP Port", desc: "TCP port this web interface listens on.", type: "number", min: 1, max: 65535 }
+                    ]
+                }
+            ]
+        },
+        {
+            id: "Blinds", title: "Blinds",
+            desc: "Left and right blind configuration.",
+            groups: [
+                {
+                    title: "Left Blind",
+                    fields: [
+                        { key: "Left Name", label: "Name", type: "text" },
+                        { key: "Left Step Time", label: "Step Time", desc: "Milliseconds the motor runs per 1% of position change.", type: "number", min: 1, max: 65535 },
+                        { key: "Left Button Open", label: "Open Button Enabled", type: "bool" },
+                        { key: "Left Button Close", label: "Close Button Enabled", type: "bool" },
+                        { key: "Left Invert Buttons", label: "Invert Buttons", type: "bool" }
+                    ]
+                },
+                {
+                    title: "Right Blind",
+                    fields: [
+                        { key: "Right Name", label: "Name", type: "text" },
+                        { key: "Right Step Time", label: "Step Time", desc: "Milliseconds the motor runs per 1% of position change.", type: "number", min: 1, max: 65535 },
+                        { key: "Right Button Open", label: "Open Button Enabled", type: "bool" },
+                        { key: "Right Button Close", label: "Close Button Enabled", type: "bool" },
+                        { key: "Right Invert Buttons", label: "Invert Buttons", type: "bool" }
+                    ]
+                }
+            ]
+        },
+        {
+            id: "Log", title: "Log",
+            desc: "Where device logs are sent and how much detail they include.",
+            note: "Changes require a restart.",
+            fields: [
+                { key: "Endpoint", label: "Endpoint", desc: "Where log messages are delivered.", type: "flags", options: [["Serial", 1], ["Syslog", 2], ["File", 4]] },
+                { key: "Level", label: "Level", desc: "Which severities are logged.", type: "flags", options: [["Error", 1], ["Warning", 2], ["Information", 4], ["Debug", 8]] },
+                { key: "Syslog Server", label: "Syslog Server", desc: "Syslog server, used when Syslog is enabled above.", type: "text" },
+                { key: "Syslog Port", label: "Syslog Port", type: "number", min: 1, max: 65535 }
+            ]
+        },
+        {
+            id: "General", title: "Clock and NTP",
+            desc: "Time synchronization and time zone.",
+            note: "The clock is synchronized once at boot, not continuously - changes here only take effect on the next restart.",
+            fields: [
+                { key: "NTP Enabled", label: "Enabled", desc: "Synchronize the clock over NTP at boot.", type: "bool" },
+                { key: "NTP Server", label: "Server", desc: "NTP server hostname.", type: "text" },
+                { key: "Time Zone", label: "Time Zone", desc: "UTC offset applied to the synchronized time.", type: "number", min: -12, max: 14 }
+            ],
+            afterRender: function (card, currentValues) {
+                card.appendChild(groupTitleEl("Manual Date/Time"));
+
+                const list = document.createElement("div");
+                list.className = "settings-list";
+
+                const row = settingsRow("Set Clock", "Set the clock by hand. Only available while NTP is off.");
+
+                const input = document.createElement("input");
+                input.type = "datetime-local";
+                input.step = "1";
+
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "control-button";
+                button.textContent = "Set";
+
+                const status = document.createElement("span");
+                status.className = "setup-status";
+                status.style.marginLeft = "12px";
+
+                // Manual time and NTP are mutually exclusive: while NTP is
+                // on, boot already sets the clock, so hand-setting it here
+                // would just be overwritten on the next restart anyway.
+                const ntpToggle = card.querySelector('[data-field-key="NTP Enabled"]');
+
+                function refreshAvailability() {
+                    const ntpOn = ntpToggle ? ntpToggle.checked : !!currentValues["NTP Enabled"];
+                    input.disabled = ntpOn;
+                    button.disabled = ntpOn;
+                }
+
+                button.addEventListener("click", function () {
+                    if (!input.value) return;
+                    button.disabled = true;
+                    status.className = "setup-status";
+                    status.textContent = "Setting...";
+
+                    fetch("/api/clock/set", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                        body: "datetime=" + encodeURIComponent(input.value)
+                    }).then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+                        .then(function (result) {
+                            if (!result.ok) {
+                                status.className = "setup-status error";
+                                status.textContent = result.data.error || "Unable to set the clock.";
+                                return;
+                            }
+                            status.className = "setup-status ok";
+                            status.textContent = "Clock updated.";
+                        })
+                        .catch(function () {
+                            status.className = "setup-status error";
+                            status.textContent = "Unable to reach the device.";
+                        })
+                        .finally(refreshAvailability);
+                });
+
+                if (ntpToggle) ntpToggle.addEventListener("change", refreshAvailability);
+                refreshAvailability();
+
+                row.control.appendChild(input);
+                row.control.appendChild(button);
+                row.control.appendChild(status);
+                list.appendChild(row.row);
+                card.appendChild(list);
+            }
+        },
+        {
+            id: "MQTT", title: "MQTT",
+            desc: "Publish blind state to an MQTT broker, with optional Home Assistant discovery.",
+            note: "Changes require a restart.",
+            fields: [
+                { key: "Enabled", label: "Enabled", desc: "Publish blind state to an MQTT broker.", type: "bool" },
+                { key: "Broker", label: "Broker", desc: "MQTT broker hostname or address.", type: "text" },
+                { key: "Port", label: "Port", desc: "MQTT broker port.", type: "number", min: 1, max: 65535 },
+                { key: "User", label: "User", desc: "MQTT username. Leave empty for anonymous access.", type: "text" },
+                { key: "Password", label: "Password", desc: "MQTT password.", type: "text" },
+                { key: "Discovery Enabled", label: "Discovery Enabled", desc: "Publish Home Assistant MQTT discovery messages for both blinds.", type: "bool" },
+                { key: "Discovery Prefix", label: "Discovery Prefix", desc: "Topic prefix Home Assistant listens on for discovery.", type: "text" }
+            ]
+        },
+        {
+            id: "Webhooks", title: "Webhooks",
+            desc: "Trigger blind commands remotely via a shared token, without signing in.",
+            note: "Changes require a restart.",
+            fields: [
+                { key: "Enabled", label: "Enabled", desc: "Accept remote blind commands authenticated by token.", type: "bool" },
+                { key: "Token", label: "Token", desc: "Shared secret required on every request.", type: "text" },
+                { key: "Port", label: "Port", desc: "TCP port the webhooks server listens on.", type: "number", min: 1, max: 65535 }
+            ],
+            afterRender: function (card, currentValues, ownList) {
+                card.appendChild(groupTitleEl("Webhook URLs"));
+
+                const note = document.createElement("p");
+                note.className = "group-desc";
+                note.textContent = "Using the token and port above. GET or POST both work. id 1 is the left blind, 2 the right one.";
+                card.appendChild(note);
+
+                const list = document.createElement("div");
+                list.className = "settings-list";
+
+                function urlRow(label, url) {
+                    const row = document.createElement("div");
+                    row.className = "setting-row";
+
+                    const text = document.createElement("div");
+                    text.className = "setting-row-text";
+                    const labelEl = document.createElement("div");
+                    labelEl.className = "setting-label";
+                    labelEl.textContent = label;
+                    const urlEl = document.createElement("div");
+                    urlEl.className = "webhook-url";
+                    urlEl.textContent = url;
+                    text.appendChild(labelEl);
+                    text.appendChild(urlEl);
+                    row.appendChild(text);
+
+                    return row;
+                }
+
+                const tokenInput = ownList.querySelector('[data-field-key="Token"]');
+                const portInput = ownList.querySelector('[data-field-key="Port"]');
+
+                function render() {
+                    list.innerHTML = "";
+                    const token = tokenInput ? tokenInput.value : "";
+                    const port = portInput ? portInput.value : "";
+
+                    if (!token) {
+                        list.textContent = "Set and save a token above to see webhook URLs.";
+                        return;
+                    }
+
+                    const setBase = "http://" + window.location.hostname + ":" + port + "/component/set?token=" + encodeURIComponent(token);
+                    const getBase = "http://" + window.location.hostname + ":" + port + "/component/get?token=" + encodeURIComponent(token);
+
+                    list.appendChild(urlRow("Both blinds - Get state", getBase));
+                    [["1", "Left"], ["2", "Right"]].forEach(function (pair) {
+                        list.appendChild(urlRow(pair[1] + " - Get state", getBase + "&id=" + pair[0]));
+                        list.appendChild(urlRow(pair[1] + " - Open", setBase + "&id=" + pair[0] + "&property=state&value=open"));
+                        list.appendChild(urlRow(pair[1] + " - Close", setBase + "&id=" + pair[0] + "&property=state&value=close"));
+                        list.appendChild(urlRow(pair[1] + " - Stop", setBase + "&id=" + pair[0] + "&property=state&value=stop"));
+                        list.appendChild(urlRow(pair[1] + " - Set position (0-100)", setBase + "&id=" + pair[0] + "&property=position&value=50"));
+                    });
+                }
+
+                if (tokenInput) tokenInput.addEventListener("input", render);
+                if (portInput) portInput.addEventListener("input", render);
+                render();
+
+                card.appendChild(list);
+            }
+        }
+    ];
+
+    // MQTT and Webhooks stay independent sections for save/read purposes
+    // (each still maps to its own /api/settings section id and its own
+    // POST), but share one visual tab - same as DeviceIQ's "Integrations".
+    const COMBINED_TABS = [
+        { id: "Integrations", title: "Integrations", desc: "MQTT broker and webhook integrations.", sections: ["MQTT", "Webhooks"] }
+    ];
+
+    const combinedSectionIds = {};
+    COMBINED_TABS.forEach(function (combo) {
+        combo.sections.forEach(function (sectionId) { combinedSectionIds[sectionId] = combo; });
+    });
+
+    const TABS = [];
+    const addedComboTabs = {};
+    SECTIONS.forEach(function (section) {
+        const combo = combinedSectionIds[section.id];
+        if (combo) {
+            if (!addedComboTabs[combo.id]) {
+                TABS.push({ id: combo.id, label: combo.title });
+                addedComboTabs[combo.id] = true;
+            }
+            return;
+        }
+        TABS.push({ id: section.id, label: section.title });
+    });
+    TABS.push({ id: "Configuration", label: "Configuration" });
+
+    const sectionReaders = {};
+    let activeTab = TABS[0].id;
+    let dirty = false;
+    let currentHostname = "";
+
+    function markDirty() {
+        dirty = true;
+        document.getElementById("save-all-button").disabled = false;
+    }
+
+    function markClean() {
+        dirty = false;
+        document.getElementById("save-all-button").disabled = true;
+    }
+
+    function fieldRow(field, currentValue, extra) {
+        extra = extra || {};
+
+        const row = document.createElement("div");
+        row.className = "setting-row";
+
+        const text = document.createElement("div");
+        text.className = "setting-row-text";
+        const label = document.createElement("div");
+        label.className = "setting-label";
+        label.textContent = field.label;
+        text.appendChild(label);
+        if (field.desc) {
+            const desc = document.createElement("div");
+            desc.className = "setting-desc";
+            desc.textContent = field.desc;
+            text.appendChild(desc);
+        }
+        row.appendChild(text);
+
+        const control = document.createElement("div");
+        control.className = "setting-row-control";
+
+        let read;
+        let dhcpRef = null;
+
+        if (field.type === "bool") {
+            const wrap = document.createElement("label");
+            wrap.className = "toggle";
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.dataset.fieldKey = field.key;
+            input.checked = !!currentValue;
+            input.addEventListener("change", function () {
+                markDirty();
+                if (extra.onChange) extra.onChange(input.checked);
+            });
+            const track = document.createElement("span");
+            track.className = "track";
+            wrap.appendChild(input);
+            wrap.appendChild(track);
+            control.appendChild(wrap);
+            read = function () { return input.checked; };
+        } else if (field.type === "select") {
+            const select = document.createElement("select");
+            select.dataset.fieldKey = field.key;
+            field.options.forEach(function (option) {
+                const opt = document.createElement("option");
+                opt.value = option[0];
+                opt.textContent = option[1];
+                if (option[0] === currentValue) opt.selected = true;
+                select.appendChild(opt);
+            });
+            select.addEventListener("change", markDirty);
+            control.appendChild(select);
+            read = function () { return select.value; };
+        } else if (field.type === "flags") {
+            const wrap = document.createElement("div");
+            wrap.className = "flags";
+            const mask = currentValue || 0;
+            const boxes = field.options.map(function (option) {
+                const optLabel = document.createElement("label");
+                optLabel.className = "flag-option";
+                const optInput = document.createElement("input");
+                optInput.type = "checkbox";
+                optInput.checked = (mask & option[1]) !== 0;
+                optInput.addEventListener("change", markDirty);
+                optLabel.appendChild(optInput);
+                optLabel.appendChild(document.createTextNode(" " + option[0]));
+                wrap.appendChild(optLabel);
+                return { input: optInput, bit: option[1] };
+            });
+            control.appendChild(wrap);
+            read = function () {
+                let result = 0;
+                boxes.forEach(function (box) { if (box.input.checked) result |= box.bit; });
+                return result;
+            };
+        } else {
+            const input = document.createElement("input");
+            input.dataset.fieldKey = field.key;
+            input.type = field.type === "number" ? "number" : "text";
+            if (field.type === "number") {
+                if (field.min !== undefined) input.min = field.min;
+                if (field.max !== undefined) input.max = field.max;
+            }
+            const initialValue = currentValue === undefined || currentValue === null ? "" : currentValue;
+            input.value = initialValue;
+
+            let configuredValue = initialValue;
+            input.addEventListener("input", function () {
+                configuredValue = input.value;
+                markDirty();
+            });
+            control.appendChild(input);
+
+            read = function () {
+                const value = input.disabled ? configuredValue : input.value;
+                return field.type === "number" ? Number(value) : value;
+            };
+
+            if (extra.dhcpBound) {
+                dhcpRef = {
+                    input: input,
+                    liveValue: extra.liveValue === undefined || extra.liveValue === null ? "" : extra.liveValue,
+                    getConfigured: function () { return configuredValue; }
+                };
+            }
+        }
+
+        row.appendChild(control);
+        return { row: row, read: read, dhcpRef: dhcpRef };
+    }
+
+    function renderPanel(section, currentValues) {
+        const panel = document.createElement("div");
+        panel.className = "tab-panel";
+        panel.id = "panel-" + section.id;
+
+        const card = document.createElement("div");
+        card.className = "setup-card";
+
+        const header = document.createElement("div");
+        header.className = "panel-header";
+        const title = document.createElement("h2");
+        title.textContent = section.title;
+        const desc = document.createElement("p");
+        desc.textContent = section.desc + (section.note ? " " + section.note : "");
+        header.appendChild(title);
+        header.appendChild(desc);
+        card.appendChild(header);
+
+        const readers = {};
+        const dhcpRefs = [];
+
+        function applyDhcpState(dhcpOn) {
+            dhcpRefs.forEach(function (ref) {
+                ref.input.disabled = dhcpOn;
+                ref.input.value = dhcpOn ? ref.liveValue : ref.getConfigured();
+            });
+        }
+
+        const groups = section.groups || [{ title: null, fields: section.fields }];
+
+        groups.forEach(function (group) {
+            if (group.title) {
+                const groupTitle = document.createElement("div");
+                groupTitle.className = "group-title";
+                groupTitle.textContent = group.title;
+                card.appendChild(groupTitle);
+            }
+
+            const list = document.createElement("div");
+            list.className = "settings-list";
+
+            group.fields.forEach(function (field) {
+                const extra = {};
+                if (field.dhcpBound) {
+                    extra.dhcpBound = true;
+                    extra.liveValue = currentValues[field.liveKey];
+                }
+                if (field.key === "DHCP Client") extra.onChange = applyDhcpState;
+
+                const built = fieldRow(field, currentValues[field.key], extra);
+                readers[field.key] = built.read;
+                if (built.dhcpRef) dhcpRefs.push(built.dhcpRef);
+                list.appendChild(built.row);
+            });
+
+            card.appendChild(list);
+        });
+
+        sectionReaders[section.id] = readers;
+
+        if (dhcpRefs.length > 0) applyDhcpState(!!currentValues["DHCP Client"]);
+        if (section.afterRender) section.afterRender(card, currentValues);
+
+        panel.appendChild(card);
+        return panel;
+    }
+
+    function renderCombinedPanel(combo, settings) {
+        const panel = document.createElement("div");
+        panel.className = "tab-panel";
+        panel.id = "panel-" + combo.id;
+
+        const card = document.createElement("div");
+        card.className = "setup-card";
+
+        const header = document.createElement("div");
+        header.className = "panel-header";
+        const title = document.createElement("h2");
+        title.textContent = combo.title;
+        const desc = document.createElement("p");
+        desc.textContent = combo.desc;
+        header.appendChild(title);
+        header.appendChild(desc);
+        card.appendChild(header);
+
+        combo.sections.forEach(function (sectionId) {
+            const section = SECTIONS.find(function (item) { return item.id === sectionId; });
+            const currentValues = settings[sectionId] || {};
+
+            card.appendChild(groupTitleEl(section.title));
+            if (section.note) {
+                const note = document.createElement("p");
+                note.className = "group-desc";
+                note.textContent = section.note;
+                card.appendChild(note);
+            }
+
+            const list = document.createElement("div");
+            list.className = "settings-list";
+
+            const readers = {};
+            section.fields.forEach(function (field) {
+                const built = fieldRow(field, currentValues[field.key], {});
+                readers[field.key] = built.read;
+                list.appendChild(built.row);
+            });
+            sectionReaders[sectionId] = readers;
+            card.appendChild(list);
+            if (section.afterRender) section.afterRender(card, currentValues, list);
+        });
+
+        panel.appendChild(card);
+        return panel;
+    }
+
+    function groupTitleEl(text) {
+        const el = document.createElement("div");
+        el.className = "group-title";
+        el.textContent = text;
+        return el;
+    }
+
+    function settingsRow(labelText, descText) {
+        const row = document.createElement("div");
+        row.className = "setting-row";
+
+        const text = document.createElement("div");
+        text.className = "setting-row-text";
+        const label = document.createElement("div");
+        label.className = "setting-label";
+        label.textContent = labelText;
+        text.appendChild(label);
+        if (descText) {
+            const desc = document.createElement("div");
+            desc.className = "setting-desc";
+            desc.textContent = descText;
+            text.appendChild(desc);
+        }
+        row.appendChild(text);
+
+        const control = document.createElement("div");
+        control.className = "setting-row-control";
+        row.appendChild(control);
+
+        return { row: row, control: control };
+    }
+
+    function renderConfigurationPanel() {
+        const panel = document.createElement("div");
+        panel.className = "tab-panel";
+        panel.id = "panel-Configuration";
+
+        const card = document.createElement("div");
+        card.className = "setup-card";
+
+        const header = document.createElement("div");
+        header.className = "panel-header";
+        const title = document.createElement("h2");
+        title.textContent = "Configuration";
+        const desc = document.createElement("p");
+        desc.textContent = "Back up or restore the configuration, restart the device, or restore factory defaults.";
+        header.appendChild(title);
+        header.appendChild(desc);
+        card.appendChild(header);
+
+        // ---- Backup and Restore ----
+        card.appendChild(groupTitleEl("Backup and Restore"));
+        const backupList = document.createElement("div");
+        backupList.className = "settings-list";
+
+        const exportRow = settingsRow("Export", "Download the current config.json, including credentials.");
+        const exportLink = document.createElement("a");
+        exportLink.href = "/api/config/export";
+        exportLink.setAttribute("download", "config-" + currentHostname + ".json");
+        exportLink.className = "control-button";
+        exportLink.textContent = "Download";
+        exportRow.control.appendChild(exportLink);
+        backupList.appendChild(exportRow.row);
+
+        const importRow = settingsRow("Import", "Upload a configuration file. It is validated before anything is applied, and you will be asked to confirm before it replaces the current configuration.");
+        const fileInput = document.createElement("input");
+        fileInput.type = "file";
+        fileInput.accept = ".json,application/json";
+        fileInput.style.display = "none";
+
+        const uploadButton = document.createElement("button");
+        uploadButton.type = "button";
+        uploadButton.className = "control-button";
+        uploadButton.textContent = "Upload";
+        uploadButton.addEventListener("click", function () { fileInput.click(); });
+
+        fileInput.addEventListener("change", function () {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            uploadButton.disabled = true;
+            uploadButton.textContent = "Validating...";
+
+            const formData = new FormData();
+            formData.append("file", file, file.name);
+
+            fetch("/api/config/import", { method: "POST", body: formData })
+                .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+                .then(function (result) {
+                    fileInput.value = "";
+                    uploadButton.disabled = false;
+                    uploadButton.textContent = "Upload";
+
+                    if (!result.ok) {
+                        Notifications.show(result.data.error || "The uploaded file is not a valid configuration.", { title: "Configuration" });
+                        return;
+                    }
+
+                    Notifications.confirm(
+                        "The uploaded file is a valid configuration. Import it and restart the device now?",
+                        { confirmLabel: "Import & Restart" }
+                    ).then(function (confirmed) {
+                        if (!confirmed) return;
+
+                        fetch("/api/config/import/apply", { method: "POST" })
+                            .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+                            .then(function (applyResult) {
+                                if (!applyResult.ok) {
+                                    Notifications.show(applyResult.data.error || "Import failed.", { title: "Configuration" });
+                                    return;
+                                }
+                                Notifications.restarting();
+                            })
+                            .catch(function () {
+                                // The device may already be restarting by the
+                                // time the connection drops.
+                                Notifications.restarting();
+                            });
+                    });
+                })
+                .catch(function () {
+                    fileInput.value = "";
+                    uploadButton.disabled = false;
+                    uploadButton.textContent = "Upload";
+                    Notifications.show("Unable to reach the device.", { title: "Configuration" });
+                });
+        });
+
+        importRow.control.appendChild(fileInput);
+        importRow.control.appendChild(uploadButton);
+        backupList.appendChild(importRow.row);
+
+        card.appendChild(backupList);
+
+        // ---- Tools ----
+        card.appendChild(groupTitleEl("Tools"));
+        const list = document.createElement("div");
+        list.className = "settings-list";
+
+        const restartRow = settingsRow("Restart", "Restarts the device.");
+        const restartButton = document.createElement("button");
+        restartButton.type = "button";
+        restartButton.className = "control-button";
+        restartButton.textContent = "Restart";
+        restartButton.addEventListener("click", function () {
+            Notifications.confirm("Restart the device now?", { confirmLabel: "Restart" }).then(function (confirmed) {
+                if (!confirmed) return;
+                Notifications.reboot();
+            });
+        });
+        restartRow.control.appendChild(restartButton);
+        list.appendChild(restartRow.row);
+
+        const resetRow = settingsRow(
+            "Restore Factory Defaults",
+            "Erases all settings, including WiFi credentials and accounts, and restarts the device. This cannot be undone."
+        );
+        const resetButton = document.createElement("button");
+        resetButton.type = "button";
+        resetButton.className = "control-button danger";
+        resetButton.textContent = "Reset to Defaults";
+        resetButton.addEventListener("click", function () {
+            Notifications.confirm(
+                "This erases all settings and restarts the device. This cannot be undone. Continue?",
+                { confirmLabel: "Reset to Defaults" }
+            ).then(function (confirmed) {
+                if (!confirmed) return;
+
+                resetButton.disabled = true;
+                fetch("/api/reset", { method: "POST", keepalive: true }).catch(function () {});
+                Notifications.restarting();
+            });
+        });
+        resetRow.control.appendChild(resetButton);
+        list.appendChild(resetRow.row);
+
+        card.appendChild(list);
+        panel.appendChild(card);
+        return panel;
+    }
+
+    function selectTab(tabId) {
+        activeTab = tabId;
+        document.querySelectorAll(".tab-button").forEach(function (button) {
+            button.classList.toggle("active", button.dataset.tab === tabId);
+        });
+        document.querySelectorAll(".tab-panel").forEach(function (panel) {
+            panel.classList.toggle("active", panel.id === "panel-" + tabId);
+        });
+    }
+
+    function render(settings) {
+        const tabsContainer = document.getElementById("tabs");
+        const panelsContainer = document.getElementById("panels");
+        tabsContainer.innerHTML = "";
+        panelsContainer.innerHTML = "";
+
+        TABS.forEach(function (tab) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "tab-button";
+            button.dataset.tab = tab.id;
+            button.textContent = tab.label;
+            button.addEventListener("click", function () { selectTab(tab.id); });
+            tabsContainer.appendChild(button);
+        });
+
+        SECTIONS.forEach(function (section) {
+            if (combinedSectionIds[section.id]) return; // rendered as part of a combined tab, below
+            panelsContainer.appendChild(renderPanel(section, settings[section.id] || {}));
+        });
+        COMBINED_TABS.forEach(function (combo) {
+            panelsContainer.appendChild(renderCombinedPanel(combo, settings));
+        });
+        panelsContainer.appendChild(renderConfigurationPanel());
+
+        selectTab(activeTab);
+    }
+
+    function saveSection(section) {
+        const body = new URLSearchParams();
+        body.set("section", section.id);
+        Object.keys(sectionReaders[section.id]).forEach(function (key) {
+            body.set(key, sectionReaders[section.id][key]());
+        });
+
+        return fetch("/api/settings", { method: "POST", body: body })
+            .then(function (response) {
+                return response.json().then(function (data) { return { section: section.id, ok: response.ok, data: data }; });
+            }).catch(function () {
+                return { section: section.id, ok: false, data: { error: "Unable to reach the device." } };
+            });
+    }
+
+    function saveAll() {
+        let chain = Promise.resolve([]);
+        SECTIONS.forEach(function (section) {
+            chain = chain.then(function (results) {
+                return saveSection(section).then(function (result) { return results.concat([result]); });
+            });
+        });
+        return chain;
+    }
+
+    const saveButton = document.getElementById("save-all-button");
+    const status = document.getElementById("save-status");
+
+    saveButton.addEventListener("click", function () {
+        saveButton.disabled = true;
+        status.className = "setup-status";
+        status.textContent = "Saving...";
+
+        saveAll().then(function (results) {
+            const failed = results.filter(function (result) { return !result.ok; });
+            const restartNeeded = results.some(function (result) { return result.ok && result.data.restart; });
+
+            if (failed.length > 0) {
+                saveButton.disabled = false;
+                status.className = "setup-status error";
+                status.textContent = failed.length + " of " + results.length + " section(s) failed to save.";
+                failed.forEach(function (result) {
+                    Notifications.show(result.data.error || "Save failed.", { title: "Settings · " + result.section });
+                });
+            } else {
+                markClean();
+                status.className = "setup-status ok";
+                status.textContent = "All changes saved.";
+            }
+
+            if (restartNeeded) {
+                Notifications.confirm(
+                    "Some changes require a restart to take effect. Restart now?",
+                    { confirmLabel: "Restart" }
+                ).then(function (confirmed) {
+                    if (!confirmed) return;
+                    Notifications.reboot();
+                });
+            }
+        });
+    });
+
+    fetch("/api/session").then(function (response) { return response.json(); }).then(function (session) {
+        if (!session.authenticated) {
+            window.location.replace("/");
+            return Promise.reject();
+        }
+        if (!session.admin) {
+            window.location.replace("/dashboard.html");
+            return Promise.reject();
+        }
+        currentHostname = session.hostname;
+        document.getElementById("topbar-hostname").textContent = session.hostname;
+        document.getElementById("whoami").textContent = session.username + " · admin";
+        document.title = session.productFamily + " [" + session.hostname + "] - Setup";
+        document.getElementById("sidebar-product").textContent = session.productFamily + " " + session.productName;
+        document.getElementById("sidebar-version").textContent = "v" + session.softwareVersion;
+        return fetch("/api/settings");
+    }).then(function (response) { return response.json(); })
+        .then(function (settings) { render(settings); })
+        .catch(function () {});
+
+    document.getElementById("logout-button").addEventListener("click", function () {
+        fetch("/api/logout", { method: "POST" }).finally(function () { window.location.replace("/"); });
+    });
+})();
+</script>
+</body>
+</html>
