@@ -17,8 +17,8 @@ struct defaults {
         const char* Netmask = "255.255.255.0";
         const char* DNS1 = "8.8.8.8";
         const char* DNS2 = "8.8.4.4";
-        const char* SSID = "IOT-3";
-        const char* Passphrase = "1921682GenesisIOT-3";
+        const char* SSID = "IOT-2";
+        const char* Passphrase = "1921682GenesisIOT-2";
         const uint16_t ConnectionTimeout = 30;
         const bool ReconnectEnabled = true;
         const uint16_t ReconnectInitialInterval = 5;
@@ -37,6 +37,16 @@ struct defaults {
             const bool InvertButtons = false;
             const char* LeftName = "Left";
             const char* RightName = "Right";
+            // Original hardcoded wiring, kept as the default so existing
+            // devices behave the same until someone changes them.
+            const uint8_t LeftButtonOpenPin = 5;
+            const uint8_t LeftButtonClosePin = 4;
+            const uint8_t LeftSwitchOpenPin = 14;
+            const uint8_t LeftSwitchClosePin = 12;
+            const uint8_t RightButtonOpenPin = 0;
+            const uint8_t RightButtonClosePin = 2;
+            const uint8_t RightSwitchOpenPin = 13;
+            const uint8_t RightSwitchClosePin = 10;
         } Blinds;
     } Components;
     struct users {
@@ -50,11 +60,13 @@ struct defaults {
         } User;
     } Users;
     struct log {
-        const IPAddress SyslogServer = IPAddress(192, 168, 4, 100);
+        // Empty by default (disabled), same convention as MQTT.Broker below
+        // - a hostname or IP, resolved at send time (see Logger::Syslog_Server).
+        const char* SyslogServer = "syslog.svr";
         const uint16_t SyslogPort = 514;
         // Matches Lite's previous unconditional behavior: Serial + Syslog,
         // everything logged.
-        const uint8_t Endpoint = logger::Endpoints::Serial | logger::Endpoints::Syslog;
+        const uint8_t Endpoint = logger::Endpoints::Serial | logger::Endpoints::File;
         const uint8_t Level = logger::LogLevels::All;
     } Log;
     struct general {

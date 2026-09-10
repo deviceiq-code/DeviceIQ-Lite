@@ -9,6 +9,7 @@
 
 #include "core/Logger.h"
 #include "core/Settings.h"
+#include "core/State.h"
 #include "core/MQTTClient.h"
 #include "core/WebhookServer.h"
 #include "Version.h"
@@ -130,12 +131,13 @@ void loop() {
   BlindL->Control();
   BlindR->Control();
   GeneralTimer->Control();
+  DeviceState.Control();
   MQTTClient.Loop();
 }
 
 void setup() {
   Serial.begin(115200);
-  Serial.println();
+  Serial.println("Starting " + String(Version::ProductFamily) + "...");
 
   if(!LittleFS.begin()) {
     Serial.println("Error while mounting LittleFS. Unable to continue.");
@@ -144,6 +146,7 @@ void setup() {
 
   GeneralTimer = new Timer();
   Settings.Load();
+  DeviceState.Load();
 
   // Settings.FactoryReset();
 
@@ -153,8 +156,6 @@ void setup() {
   Logger.Hostname(Settings.Network_Hostname());
   Logger.Endpoint(Settings.Log_Endpoint());
   Logger.Level(Settings.Log_Level());
-
-  Logger.Write("Starting " + String(Version::ProductFamily) + "...");
 
   WiFi.mode(WIFI_STA);
   // hostname() only takes effect reliably once STA mode is already set, and
@@ -215,14 +216,14 @@ void setup() {
   MDNS.begin(Settings.Network_Hostname());
 
   // Left Blind
-  BlindL = new Blinds(Settings.BlindL_Name(), 5, 4, 14, 12, EEPROM_ADDR_BLINDL_POSITION);
+  BlindL = new Blinds(Settings.BlindL_Name(), Settings.BlindL_PinButtonOpen(), Settings.BlindL_PinButtonClose(), Settings.BlindL_PinSwitchOpen(), Settings.BlindL_PinSwitchClose(), BlindSlot::Left);
   BlindL->Step_Ms(Settings.BlindL_StepTime());
   BlindL->ButtonOpenEnabled(Settings.BlindL_ButtonOpen());
   BlindL->ButtonCloseEnabled(Settings.BlindL_ButtonClose());
   BlindL->InvertButtons(Settings.BlindL_InvertButtons());  
 
   // Right Blind
-  BlindR = new Blinds(Settings.BlindR_Name(), 0, 2, 13, 10, EEPROM_ADDR_BLINDR_POSITION);
+  BlindR = new Blinds(Settings.BlindR_Name(), Settings.BlindR_PinButtonOpen(), Settings.BlindR_PinButtonClose(), Settings.BlindR_PinSwitchOpen(), Settings.BlindR_PinSwitchClose(), BlindSlot::Right);
   BlindR->Step_Ms(Settings.BlindR_StepTime());
   BlindR->ButtonOpenEnabled(Settings.BlindR_ButtonOpen());
   BlindR->ButtonCloseEnabled(Settings.BlindR_ButtonClose());
@@ -273,6 +274,7 @@ void setup() {
     doc["productName"] = Version::ProductName;
     doc["softwareVersion"] = Version::Software::Info();
     doc["idleTimeoutMs"] = SESSION_IDLE_TIMEOUT_MS;
+    doc["logFileEnabled"] = (Settings.Log_Endpoint() & logger::Endpoints::File) != 0;
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
     serializeJson(doc, *response);
@@ -401,6 +403,78 @@ void setup() {
   Webserver->on("/users.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/users.html", "text/html");
     Logger.Write("Web GET " + request->url());
+  });
+
+  Webserver->on("/log.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/log.html", "text/html");
+    Logger.Write("Web GET " + request->url());
+  });
+
+  Webserver->on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request){
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    String content;
+    if(LittleFS.exists(LOG_FILE_NAME)) {
+      File file = LittleFS.open(LOG_FILE_NAME, "r");
+      if(file) { content = file.readString(); file.close(); }
+    }
+
+    // Mirrors DeviceIQ's own log viewer: walk backward from the end
+    // counting newlines to keep only the requested tail of the file.
+    String linesParam = request->hasParam("lines") ? request->getParam("lines")->value() : String();
+    bool showAll = linesParam == "all";
+    uint32_t requestedLines = 500;
+    if(linesParam.length() && !showAll) {
+      long parsed = linesParam.toInt();
+      if(parsed > 0) requestedLines = (uint32_t)parsed;
+    }
+
+    size_t start = 0;
+    if(!showAll) {
+      size_t cursor = content.length();
+      while(cursor > 0 && (content[cursor - 1] == '\n' || content[cursor - 1] == '\r')) cursor--;
+      start = cursor;
+      uint32_t linesFound = 0;
+      while(start > 0) {
+        start--;
+        if(content[start] != '\n') continue;
+        linesFound++;
+        if(linesFound == requestedLines) { start++; break; }
+      }
+    }
+
+    request->send(200, "text/plain", content.substring(start));
+  });
+
+  Webserver->on("/api/log/export", HTTP_GET, [](AsyncWebServerRequest *request){
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    AsyncWebServerResponse *response = LittleFS.exists(LOG_FILE_NAME)
+      ? request->beginResponse(LittleFS, LOG_FILE_NAME, "text/plain")
+      : request->beginResponse(200, "text/plain", "");
+    response->addHeader("Content-Disposition", "attachment; filename=\"device.log\"");
+    request->send(response);
+    Logger.Write("Web GET " + request->url() + " - Log exported (" + session->Username + ")");
+  });
+
+  Webserver->on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request){
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    bool success = !LittleFS.exists(LOG_FILE_NAME) || LittleFS.remove(LOG_FILE_NAME);
+
+    if(!success) {
+      request->send(500, "application/json", "{\"error\":\"Unable to clear the log file.\"}");
+      Logger.Write("Web POST " + request->url() + " - Log clear rejected (" + session->Username + ")", logger::Warning);
+      return;
+    }
+
+    request->send(200, "application/json", "{\"success\":true}");
+    // Logged after clearing: if File is one of the active log endpoints,
+    // this becomes the first entry of the fresh log.
+    Logger.Write("Web POST " + request->url() + " - Log clear accepted (" + session->Username + ")");
   });
 
   Webserver->on("/api/blinds", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -708,16 +782,24 @@ void setup() {
     blinds["Left Button Open"] = Settings.BlindL_ButtonOpen();
     blinds["Left Button Close"] = Settings.BlindL_ButtonClose();
     blinds["Left Invert Buttons"] = Settings.BlindL_InvertButtons();
+    blinds["Left Button Open Pin"] = Settings.BlindL_PinButtonOpen();
+    blinds["Left Button Close Pin"] = Settings.BlindL_PinButtonClose();
+    blinds["Left Switch Open Pin"] = Settings.BlindL_PinSwitchOpen();
+    blinds["Left Switch Close Pin"] = Settings.BlindL_PinSwitchClose();
     blinds["Right Name"] = Settings.BlindR_Name();
     blinds["Right Step Time"] = Settings.BlindR_StepTime();
     blinds["Right Button Open"] = Settings.BlindR_ButtonOpen();
     blinds["Right Button Close"] = Settings.BlindR_ButtonClose();
     blinds["Right Invert Buttons"] = Settings.BlindR_InvertButtons();
+    blinds["Right Button Open Pin"] = Settings.BlindR_PinButtonOpen();
+    blinds["Right Button Close Pin"] = Settings.BlindR_PinButtonClose();
+    blinds["Right Switch Open Pin"] = Settings.BlindR_PinSwitchOpen();
+    blinds["Right Switch Close Pin"] = Settings.BlindR_PinSwitchClose();
 
     JsonObject log = doc["Log"].to<JsonObject>();
     log["Endpoint"] = Settings.Log_Endpoint();
     log["Level"] = Settings.Log_Level();
-    log["Syslog Server"] = Settings.Syslog_Server().toString();
+    log["Syslog Server"] = Settings.Syslog_Server();
     log["Syslog Port"] = Settings.Syslog_Port();
 
     JsonObject general = doc["General"].to<JsonObject>();
@@ -810,6 +892,10 @@ void setup() {
       uint16_t LeftStepTime(Settings.BlindL_StepTime()), RightStepTime(Settings.BlindR_StepTime());
       bool LeftButtonOpen(Settings.BlindL_ButtonOpen()), LeftButtonClose(Settings.BlindL_ButtonClose()), LeftInvert(Settings.BlindL_InvertButtons());
       bool RightButtonOpen(Settings.BlindR_ButtonOpen()), RightButtonClose(Settings.BlindR_ButtonClose()), RightInvert(Settings.BlindR_InvertButtons());
+      uint8_t LeftPinButtonOpen(Settings.BlindL_PinButtonOpen()), LeftPinButtonClose(Settings.BlindL_PinButtonClose());
+      uint8_t LeftPinSwitchOpen(Settings.BlindL_PinSwitchOpen()), LeftPinSwitchClose(Settings.BlindL_PinSwitchClose());
+      uint8_t RightPinButtonOpen(Settings.BlindR_PinButtonOpen()), RightPinButtonClose(Settings.BlindR_PinButtonClose());
+      uint8_t RightPinSwitchOpen(Settings.BlindR_PinSwitchOpen()), RightPinSwitchClose(Settings.BlindR_PinSwitchClose());
 
       for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
         const AsyncWebParameter *p = request->getParam(i);
@@ -819,11 +905,19 @@ void setup() {
         if(n == "Left Button Open") LeftButtonOpen = (v == "true");
         if(n == "Left Button Close") LeftButtonClose = (v == "true");
         if(n == "Left Invert Buttons") LeftInvert = (v == "true");
+        if(n == "Left Button Open Pin") LeftPinButtonOpen = v.toInt();
+        if(n == "Left Button Close Pin") LeftPinButtonClose = v.toInt();
+        if(n == "Left Switch Open Pin") LeftPinSwitchOpen = v.toInt();
+        if(n == "Left Switch Close Pin") LeftPinSwitchClose = v.toInt();
         if(n == "Right Name") RightName = v;
         if(n == "Right Step Time") RightStepTime = v.toInt();
         if(n == "Right Button Open") RightButtonOpen = (v == "true");
         if(n == "Right Button Close") RightButtonClose = (v == "true");
         if(n == "Right Invert Buttons") RightInvert = (v == "true");
+        if(n == "Right Button Open Pin") RightPinButtonOpen = v.toInt();
+        if(n == "Right Button Close Pin") RightPinButtonClose = v.toInt();
+        if(n == "Right Switch Open Pin") RightPinSwitchOpen = v.toInt();
+        if(n == "Right Switch Close Pin") RightPinSwitchClose = v.toInt();
       }
 
       Settings.BlindL_Name(LeftName); BlindL->Name = Settings.BlindL_Name();
@@ -836,12 +930,28 @@ void setup() {
       Settings.BlindR_ButtonOpen(RightButtonOpen); BlindR->ButtonOpenEnabled(RightButtonOpen);
       Settings.BlindR_ButtonClose(RightButtonClose); BlindR->ButtonCloseEnabled(RightButtonClose);
       Settings.BlindR_InvertButtons(RightInvert); BlindR->InvertButtons(RightInvert);
+
+      // Pins are only read when the Blinds objects are constructed at boot,
+      // so - unlike the fields above - changing them has no live effect.
+      bool pinsChanged = LeftPinButtonOpen != Settings.BlindL_PinButtonOpen() || LeftPinButtonClose != Settings.BlindL_PinButtonClose()
+        || LeftPinSwitchOpen != Settings.BlindL_PinSwitchOpen() || LeftPinSwitchClose != Settings.BlindL_PinSwitchClose()
+        || RightPinButtonOpen != Settings.BlindR_PinButtonOpen() || RightPinButtonClose != Settings.BlindR_PinButtonClose()
+        || RightPinSwitchOpen != Settings.BlindR_PinSwitchOpen() || RightPinSwitchClose != Settings.BlindR_PinSwitchClose();
+      Settings.BlindL_PinButtonOpen(LeftPinButtonOpen);
+      Settings.BlindL_PinButtonClose(LeftPinButtonClose);
+      Settings.BlindL_PinSwitchOpen(LeftPinSwitchOpen);
+      Settings.BlindL_PinSwitchClose(LeftPinSwitchClose);
+      Settings.BlindR_PinButtonOpen(RightPinButtonOpen);
+      Settings.BlindR_PinButtonClose(RightPinButtonClose);
+      Settings.BlindR_PinSwitchOpen(RightPinSwitchOpen);
+      Settings.BlindR_PinSwitchClose(RightPinSwitchClose);
+
       Settings.Save();
-      restart = false;
+      restart = pinsChanged;
     } else if(section == "Log") {
       uint8_t Endpoint(Settings.Log_Endpoint());
       uint8_t Level(Settings.Log_Level());
-      IPAddress Server(Settings.Syslog_Server());
+      String Server(Settings.Syslog_Server());
       uint16_t Port(Settings.Syslog_Port());
 
       for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -849,16 +959,22 @@ void setup() {
         String n = p->name(), v = p->value();
         if(n == "Endpoint") Endpoint = v.toInt();
         if(n == "Level") Level = v.toInt();
-        if(n == "Syslog Server") Server.fromString(v);
+        // A hostname, not just a dotted IP - Server.fromString() used to
+        // silently fail (and drop the change) for anything but a literal
+        // IP; resolution now happens at send time in Logger::LogToSyslog().
+        if(n == "Syslog Server") Server = v;
         if(n == "Syslog Port") Port = v.toInt();
       }
 
-      Settings.Log_Endpoint(Endpoint);
-      Settings.Log_Level(Level);
-      Settings.Syslog_Server(Server);
-      Settings.Syslog_Port(Port);
+      Settings.Log_Endpoint(Endpoint); Logger.Endpoint(Endpoint);
+      Settings.Log_Level(Level); Logger.Level(Level);
+      Settings.Syslog_Server(Server); Logger.Syslog_Server(Server);
+      Settings.Syslog_Port(Port); Logger.Syslog_Port(Port);
       Settings.Save();
-      restart = true;
+      // Applied live above (Logger just re-reads its own bitmask/host on
+      // every Write()) - unlike most other sections, nothing here actually
+      // needs a restart to take effect.
+      restart = false;
     } else if(section == "General") {
       bool NTPEnabled(Settings.General_NTPEnabled());
       String NTPServer(Settings.General_NTPServer());
@@ -1044,6 +1160,11 @@ void setup() {
 
     LittleFS.remove(CONFIG_FILE_NAME);
     LittleFS.rename(CONFIG_IMPORT_FILE_NAME, CONFIG_FILE_NAME);
+
+    // The imported file becomes the seed of truth again - stale persisted
+    // state (blind position) from before the import could otherwise
+    // silently override it on the next boot, same as DeviceIQ.
+    LittleFS.remove(STATE_FILE_NAME);
 
     request->send(200, "application/json", "{\"ok\":true}");
     Logger.Write("Web POST " + request->url() + " - Config imported (" + session->Username + ")");

@@ -17,13 +17,13 @@ class Button {
 		typedef std::function<void()> callback_t;	
 
         uint8_t _Pin;
-	    uint32_t _short_press_count;
-	    uint32_t _first_press_time;
-	    uint8_t _press_sequences;
-	    uint32_t _press_sequence_duration;
-	    uint32_t _held_threshold;
-	    bool _was_btn_held;
-	    bool _held_callback_called;
+	    uint32_t _short_press_count = 0;
+	    uint32_t _first_press_time = 0;
+	    uint8_t _press_sequences = 0;
+	    uint32_t _press_sequence_duration = 0;
+	    uint32_t _held_threshold = 0;
+	    bool _was_btn_held = false;
+	    bool _held_callback_called = false;
 	    bool _current_state;
 	    bool _last_state;
 	    bool _changed;

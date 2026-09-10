@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <EEPROM.h>
 #include <ArduinoJson.h>
 #include "IPAddress.h"
 #include "core/Defaults.h"
@@ -14,78 +13,8 @@ const char* const CONFIG_FILE_NAME = "/config.json";
 // (validates, writes here) and /api/config/import/apply (commits it).
 const char* const CONFIG_IMPORT_FILE_NAME = "/config.import.json";
 
-// Legacy EEPROM layout, used only to migrate preferences saved by firmware
-// versions prior to the switch to config.json. Blind position (the only
-// value still persisted to EEPROM, since it changes far too often for a
-// flash-backed file) keeps living at its historical addresses below.
-const uint16_t EEPROM_ADDR_WIFI_SSID = 0;
-const uint16_t EEPROM_SIZE_WIFI_SSID = 32;
-const uint16_t EEPROM_ADDR_WIFI_PASSWORD = EEPROM_SIZE_WIFI_SSID; // 32
-const uint16_t EEPROM_SIZE_WIFI_PASSWORD = 64;
-const uint16_t EEPROM_ADDR_WIFI_DHCPCLIENT = EEPROM_ADDR_WIFI_PASSWORD + EEPROM_SIZE_WIFI_PASSWORD; // 96
-const uint16_t EEPROM_SIZE_WIFI_DHCPCLIENT = 1;
-const uint16_t EEPROM_ADDR_WIFI_IPADDRESS = EEPROM_ADDR_WIFI_DHCPCLIENT + EEPROM_SIZE_WIFI_DHCPCLIENT; // 97
-const uint16_t EEPROM_SIZE_WIFI_IPADDRESS = 4;
-const uint16_t EEPROM_ADDR_WIFI_MASK = EEPROM_ADDR_WIFI_IPADDRESS + EEPROM_SIZE_WIFI_IPADDRESS; // 101
-const uint16_t EEPROM_SIZE_WIFI_MASK = 4;
-const uint16_t EEPROM_ADDR_WIFI_GATEWAY = EEPROM_ADDR_WIFI_MASK + EEPROM_SIZE_WIFI_MASK; // 101
-const uint16_t EEPROM_SIZE_WIFI_GATEWAY = 4;
-const uint16_t EEPROM_ADDR_WIFI_HTTP_PORT = EEPROM_ADDR_WIFI_GATEWAY + EEPROM_SIZE_WIFI_GATEWAY; // 105
-const uint16_t EEPROM_SIZE_WIFI_HTTP_PORT = 2;
-const uint16_t EEPROM_ADDR_BLINDL_STEPTIME = EEPROM_ADDR_WIFI_HTTP_PORT + EEPROM_SIZE_WIFI_HTTP_PORT; // 109
-const uint16_t EEPROM_SIZE_BLINDL_STEPTIME = 2;
-const uint16_t EEPROM_ADDR_BLINDR_STEPTIME = EEPROM_ADDR_BLINDL_STEPTIME + EEPROM_SIZE_BLINDL_STEPTIME; // 111
-const uint16_t EEPROM_SIZE_BLINDR_STEPTIME = 2;
-const uint16_t EEPROM_ADDR_ROOM_NAME = EEPROM_ADDR_BLINDR_STEPTIME + EEPROM_SIZE_BLINDR_STEPTIME; // 113
-const uint16_t EEPROM_SIZE_ROOM_NAME = 32;
-const uint16_t EEPROM_ADDR_BLINDL_NAME = EEPROM_ADDR_ROOM_NAME + EEPROM_SIZE_ROOM_NAME; // 113
-const uint16_t EEPROM_SIZE_BLINDL_NAME = 32;
-const uint16_t EEPROM_ADDR_BLINDR_NAME = EEPROM_ADDR_BLINDL_NAME + EEPROM_SIZE_BLINDL_NAME; // 145
-const uint16_t EEPROM_SIZE_BLINDR_NAME = 32;
-const uint16_t EEPROM_ADDR_SECURITY_AUTH = EEPROM_ADDR_BLINDR_NAME + EEPROM_SIZE_BLINDR_NAME; // 177
-const uint16_t EEPROM_SIZE_SECURITY_AUTH = 1;
-const uint16_t EEPROM_ADDR_SECURITY_WEBUI = EEPROM_ADDR_SECURITY_AUTH + EEPROM_SIZE_SECURITY_AUTH; // 178
-const uint16_t EEPROM_SIZE_SECURITY_WEBUI = 1;
-const uint16_t EEPROM_ADDR_SECURITY_JSON = EEPROM_ADDR_SECURITY_WEBUI + EEPROM_SIZE_SECURITY_WEBUI; // 179
-const uint16_t EEPROM_SIZE_SECURITY_JSON = 1;
-const uint16_t EEPROM_ADDR_SECURITY_CONFIG = EEPROM_ADDR_SECURITY_JSON + EEPROM_SIZE_SECURITY_JSON; // 180
-const uint16_t EEPROM_SIZE_SECURITY_CONFIG = 1;
-const uint16_t EEPROM_ADDR_SECURITY_ADMINPASSWORD = EEPROM_ADDR_SECURITY_CONFIG + EEPROM_SIZE_SECURITY_CONFIG; // 181
-const uint16_t EEPROM_SIZE_SECURITY_ADMINPASSWORD = 32;
-const uint16_t EEPROM_ADDR_BLINDL_POSITION = EEPROM_ADDR_SECURITY_ADMINPASSWORD + EEPROM_SIZE_SECURITY_ADMINPASSWORD; // 213
-const uint16_t EEPROM_SIZE_BLINDL_POSITION = 1;
-const uint16_t EEPROM_ADDR_BLINDR_POSITION = EEPROM_ADDR_BLINDL_POSITION + EEPROM_SIZE_BLINDL_POSITION; // 214
-const uint16_t EEPROM_SIZE_BLINDR_POSITION = 1;
-const uint16_t EEPROM_ADDR_BLINDL_BUTTONOPEN = EEPROM_ADDR_BLINDR_POSITION + EEPROM_SIZE_BLINDR_POSITION; // 215
-const uint16_t EEPROM_SIZE_BLINDL_BUTTONOPEN = 1;
-const uint16_t EEPROM_ADDR_BLINDR_BUTTONOPEN = EEPROM_ADDR_BLINDL_BUTTONOPEN + EEPROM_SIZE_BLINDL_BUTTONOPEN; // 216
-const uint16_t EEPROM_SIZE_BLINDR_BUTTONOPEN = 1;
-const uint16_t EEPROM_ADDR_BLINDL_BUTTONCLOSE = EEPROM_ADDR_BLINDR_BUTTONOPEN + EEPROM_SIZE_BLINDR_BUTTONOPEN; // 217
-const uint16_t EEPROM_SIZE_BLINDL_BUTTONCLOSE = 1;
-const uint16_t EEPROM_ADDR_BLINDR_BUTTONCLOSE = EEPROM_ADDR_BLINDL_BUTTONCLOSE + EEPROM_SIZE_BLINDL_BUTTONCLOSE; // 218
-const uint16_t EEPROM_SIZE_BLINDR_BUTTONCLOSE = 1;
-const uint16_t EEPROM_ADDR_BLINDL_INVBUTTON = EEPROM_ADDR_BLINDR_BUTTONCLOSE + EEPROM_SIZE_BLINDR_BUTTONCLOSE; // 219
-const uint16_t EEPROM_SIZE_BLINDL_INVBUTTON = 1;
-const uint16_t EEPROM_ADDR_BLINDR_INVBUTTON = EEPROM_ADDR_BLINDL_INVBUTTON + EEPROM_SIZE_BLINDL_INVBUTTON; // 220
-const uint16_t EEPROM_SIZE_BLINDR_INVBUTTON = 1;
-const uint16_t EEPROM_ADDR_SYSLOG_SERVER = EEPROM_ADDR_BLINDR_INVBUTTON + EEPROM_SIZE_BLINDR_INVBUTTON; // 221
-const uint16_t EEPROM_SIZE_SYSLOG_SERVER = 4;
-const uint16_t EEPROM_ADDR_SYSLOG_PORT = EEPROM_ADDR_SYSLOG_SERVER + EEPROM_SIZE_SYSLOG_SERVER; // 225
-const uint16_t EEPROM_SIZE_SYSLOG_PORT = 2;
-const uint16_t EEPROM_ADDR_SYSLOG_ENABLED = EEPROM_ADDR_SYSLOG_PORT + EEPROM_SIZE_SYSLOG_PORT; // 227
-const uint16_t EEPROM_SIZE_SYSLOG_ENABLED = 1;
-
 class settings {
     private:
-        // Legacy EEPROM readers, used once by LoadLegacyEEPROM() to migrate
-        // devices that were still on the pre-config.json firmware.
-        String LegacyReadString(uint16_t Address);
-        bool LegacyReadBool(uint16_t Address);
-        int8_t LegacyReadInt8(uint16_t Address);
-        int16_t LegacyReadInt16(uint16_t Address);
-        IPAddress LegacyReadIP(uint16_t Address);
-        bool LoadLegacyEEPROM();
-
         void LoadDefaults();
         // Adds DeviceIQ's second default account (non-admin "user"). Called
         // alongside every place that bootstraps the default admin, so a
@@ -124,8 +53,12 @@ class settings {
         bool mBlindL_ButtonOpen = Defaults.Components.Blinds.ButtonOpen, mBlindR_ButtonOpen = Defaults.Components.Blinds.ButtonOpen;
         bool mBlindL_ButtonClose = Defaults.Components.Blinds.ButtonClose, mBlindR_ButtonClose = Defaults.Components.Blinds.ButtonClose;
         bool mBlindL_InvertButtons = Defaults.Components.Blinds.InvertButtons, mBlindR_InvertButtons = Defaults.Components.Blinds.InvertButtons;
+        uint8_t mBlindL_PinButtonOpen = Defaults.Components.Blinds.LeftButtonOpenPin, mBlindR_PinButtonOpen = Defaults.Components.Blinds.RightButtonOpenPin;
+        uint8_t mBlindL_PinButtonClose = Defaults.Components.Blinds.LeftButtonClosePin, mBlindR_PinButtonClose = Defaults.Components.Blinds.RightButtonClosePin;
+        uint8_t mBlindL_PinSwitchOpen = Defaults.Components.Blinds.LeftSwitchOpenPin, mBlindR_PinSwitchOpen = Defaults.Components.Blinds.RightSwitchOpenPin;
+        uint8_t mBlindL_PinSwitchClose = Defaults.Components.Blinds.LeftSwitchClosePin, mBlindR_PinSwitchClose = Defaults.Components.Blinds.RightSwitchClosePin;
 
-        IPAddress mSyslog_Server = Defaults.Log.SyslogServer;
+        String mSyslog_Server = Defaults.Log.SyslogServer;
         uint16_t mSyslog_Port = Defaults.Log.SyslogPort;
         uint8_t mLog_Endpoint = Defaults.Log.Endpoint;
         uint8_t mLog_Level = Defaults.Log.Level;
@@ -211,9 +144,28 @@ class settings {
         inline bool BlindR_InvertButtons() { return mBlindR_InvertButtons; }
         inline void BlindL_InvertButtons(bool Value) { mBlindL_InvertButtons = Value; }
         inline void BlindR_InvertButtons(bool Value) { mBlindR_InvertButtons = Value; }
+        inline uint8_t BlindL_PinButtonOpen() { return mBlindL_PinButtonOpen; }
+        inline uint8_t BlindR_PinButtonOpen() { return mBlindR_PinButtonOpen; }
+        inline void BlindL_PinButtonOpen(uint8_t Pin) { mBlindL_PinButtonOpen = Pin; }
+        inline void BlindR_PinButtonOpen(uint8_t Pin) { mBlindR_PinButtonOpen = Pin; }
+        inline uint8_t BlindL_PinButtonClose() { return mBlindL_PinButtonClose; }
+        inline uint8_t BlindR_PinButtonClose() { return mBlindR_PinButtonClose; }
+        inline void BlindL_PinButtonClose(uint8_t Pin) { mBlindL_PinButtonClose = Pin; }
+        inline void BlindR_PinButtonClose(uint8_t Pin) { mBlindR_PinButtonClose = Pin; }
+        inline uint8_t BlindL_PinSwitchOpen() { return mBlindL_PinSwitchOpen; }
+        inline uint8_t BlindR_PinSwitchOpen() { return mBlindR_PinSwitchOpen; }
+        inline void BlindL_PinSwitchOpen(uint8_t Pin) { mBlindL_PinSwitchOpen = Pin; }
+        inline void BlindR_PinSwitchOpen(uint8_t Pin) { mBlindR_PinSwitchOpen = Pin; }
+        inline uint8_t BlindL_PinSwitchClose() { return mBlindL_PinSwitchClose; }
+        inline uint8_t BlindR_PinSwitchClose() { return mBlindR_PinSwitchClose; }
+        inline void BlindL_PinSwitchClose(uint8_t Pin) { mBlindL_PinSwitchClose = Pin; }
+        inline void BlindR_PinSwitchClose(uint8_t Pin) { mBlindR_PinSwitchClose = Pin; }
 
-        inline IPAddress Syslog_Server() { return mSyslog_Server; }
-        inline void Syslog_Server(IPAddress Server) { mSyslog_Server = Server; }
+        inline String Syslog_Server() { return mSyslog_Server; }
+        // Hostname or a plain IP, resolved at send time (Logger's own
+        // ResolveSyslogAddress()) - not restricted to dotted-decimal like an
+        // IPAddress, so a typed hostname is never silently dropped on save.
+        inline void Syslog_Server(String Server) { mSyslog_Server = Server.substring(0, 64); }
         inline uint16_t Syslog_Port() { return mSyslog_Port; }
         inline void Syslog_Port(uint16_t Port) { mSyslog_Port = Port; }
         inline uint8_t Log_Endpoint() { return mLog_Endpoint; }

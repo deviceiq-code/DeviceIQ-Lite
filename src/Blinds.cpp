@@ -1,10 +1,10 @@
 #include "Blinds.h"
 
-Blinds::Blinds(uint8_t pinButtonOpen, uint8_t pinButtonClose, uint8_t pinSwitchOpen, uint8_t pinSwitchClose, uint32_t EEPROMAddress) : mPinButtonOpen(pinButtonOpen), mPinButtonClose(pinButtonClose), mPinSwitchOpen(pinSwitchOpen), mPinSwitchClose(pinSwitchClose), Name(DEF_Blind_Name), EEPROMSaveStateAddress(EEPROMAddress) {
+Blinds::Blinds(uint8_t pinButtonOpen, uint8_t pinButtonClose, uint8_t pinSwitchOpen, uint8_t pinSwitchClose, BlindSlot slot) : mPinButtonOpen(pinButtonOpen), mPinButtonClose(pinButtonClose), mPinSwitchOpen(pinSwitchOpen), mPinSwitchClose(pinSwitchClose), mSlot(slot), Name(DEF_Blind_Name) {
     Initialize();
 }
 
-Blinds::Blinds(String name, uint8_t pinButtonOpen, uint8_t pinButtonClose, uint8_t pinSwitchOpen, uint8_t pinSwitchClose, uint32_t EEPROMAddress) : mPinButtonOpen(pinButtonOpen), mPinButtonClose(pinButtonClose), mPinSwitchOpen(pinSwitchOpen), mPinSwitchClose(pinSwitchClose), Name(name), EEPROMSaveStateAddress(EEPROMAddress) {
+Blinds::Blinds(String name, uint8_t pinButtonOpen, uint8_t pinButtonClose, uint8_t pinSwitchOpen, uint8_t pinSwitchClose, BlindSlot slot) : mPinButtonOpen(pinButtonOpen), mPinButtonClose(pinButtonClose), mPinSwitchOpen(pinSwitchOpen), mPinSwitchClose(pinSwitchClose), mSlot(slot), Name(name) {
     Initialize();
 }
 
@@ -57,21 +57,16 @@ void Blinds::InvertButtons(bool Value) {
 }
 
 void Blinds::Initialize() {
-    EEPROM.begin(4096);
-
-    mPosition = EEPROM.read(EEPROMSaveStateAddress);
-    if(mPosition > DEF_Max_Position) mPosition = DEF_Max_Position;
-
-    mNewPosition = 0;
+    // Restored from state.json, like DeviceIQ's own components - never from
+    // config.json, which only holds settings that don't change on their own.
+    mPosition = DeviceState.BlindPosition(mSlot);
+    mNewPosition = mPosition;
 
     mState = Blinds_State::Stopped;
 
     // Setting Switch Open and Close
     SwitchOpen = new Switch(Name + "-SwitchOpen", mPinSwitchOpen);
     SwitchClose = new Switch(Name + "-SwitchClose", mPinSwitchClose);
-
-    SwitchOpen->SaveState = false; 
-    SwitchClose->SaveState = false;
 
     SwitchOpen->Type = Switch_Type::Simple;
     SwitchClose->Type = Switch_Type::Simple;
@@ -87,13 +82,13 @@ void Blinds::Initialize() {
 
     TimerOpen->OnTimeout([&] {
         if(mPosition < mNewPosition) { mPosition++; SwitchOpen->SetState(Switch_State::On); SwitchClose->SetState(Switch_State::Off); } else { TimerOpen->Stop(); SwitchOpen->SetState(Switch_State::Off); }
-        EEPROM.write(EEPROMSaveStateAddress, mPosition); EEPROM.commit();
+        DeviceState.BlindPosition(mSlot, mPosition);
         Logger.Write(Name + "-Position: " + String(mPosition));
     });
 
     TimerClose->OnTimeout([&] {
         if(mPosition > mNewPosition ) { mPosition--; SwitchOpen->SetState(Switch_State::Off); SwitchClose->SetState(Switch_State::On); } else { TimerClose->Stop(); SwitchClose->SetState(Switch_State::Off); }
-        EEPROM.write(EEPROMSaveStateAddress, mPosition); EEPROM.commit();
+        DeviceState.BlindPosition(mSlot, mPosition);
         Logger.Write(Name + "-Position: " + String(mPosition));
     });
 

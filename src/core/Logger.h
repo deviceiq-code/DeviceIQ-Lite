@@ -21,8 +21,11 @@ class logger {
         logger() {}
         ~logger() {}
 
-        inline IPAddress Syslog_Server() { return mSyslogServer; }
-        inline void Syslog_Server(IPAddress Server) { mSyslogServer = Server; }
+        inline String Syslog_Server() { return mSyslogServerHost; }
+        // Mirrors DeviceIQ's SyslogServerHost(): a plain IP still works via
+        // fromString() in ResolveSyslogAddress(), but a hostname is resolved
+        // via DNS too - the resolved address is cached until this changes.
+        inline void Syslog_Server(String Server) { if(mSyslogServerHost == Server) return; mSyslogServerHost = Server; mSyslogAddressValid = false; }
         inline uint16_t Syslog_Port() { return mSyslogPort; }
         inline void Syslog_Port(uint16_t Port) { mSyslogPort = Port; }
         inline String Hostname() { return mHostname; }
@@ -38,8 +41,10 @@ class logger {
         WiFiUDP mUdpClient;
         bool mUdpReady = false;
 
-        IPAddress mSyslogServer;
+        String mSyslogServerHost = "";
         uint16_t mSyslogPort = 514;
+        IPAddress mSyslogAddress;
+        bool mSyslogAddressValid = false;
         String mHostname = "";
         uint8_t mEndpoint = Endpoints::Serial | Endpoints::Syslog;
         uint8_t mLevel = LogLevels::All;
@@ -47,6 +52,7 @@ class logger {
         static char LevelChar(LogLevels MessageLevel);
         static String Timestamp();
 
+        bool ResolveSyslogAddress();
         void LogToSerial(const String& Message, LogLevels MessageLevel);
         void LogToFile(const String& Message, LogLevels MessageLevel);
         void LogToSyslog(const String& Message, LogLevels MessageLevel);

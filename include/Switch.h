@@ -10,8 +10,6 @@ enum Switch_State { On = LOW, Off = HIGH };
 const String DEF_Switch_Name = "DefaultSwitch";
 const Switch_Type DEF_SwitchType = Switch_Type::Simple;
 const Switch_State DEF_SwitchState = Switch_State::Off;
-const bool DEF_Switch_SaveState = false;
-const uint32_t DEF_Switch_EEPROMSaveStateAddress = 0;
 const uint32_t DEF_StatelessDelay = 100;
 
 const uint8_t DEF_Switch_Special_Pins[] = { 1, 3, 10 };
@@ -41,14 +39,12 @@ class Switch {
         Switch(uint8_t pin);
         Switch(String name, uint8_t pin);
         ~Switch() {}
-        
+
         // Properties
         String Name;
         Switch_Type Type;
         Switch_State DefaultState;
-        bool SaveState;
         uint32_t StatelessDelay;
-        uint32_t EEPROMSaveStateAddress = 0;
 
         inline uint8_t Pin() { return _Pin; }
         void Pin(uint8_t NewPin);

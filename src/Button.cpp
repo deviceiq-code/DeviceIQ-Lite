@@ -13,8 +13,16 @@ void Button::Pin(uint8_t NewPin) {
     if(std::find(std::begin(DEF_Button_Special_Pins), std::end(DEF_Button_Special_Pins), _Pin) != std::end(DEF_Button_Special_Pins)) pinMode(_Pin, FUNCTION_3);
     pinMode(_Pin, InternalPullUp ? INPUT_PULLUP : INPUT);
 
-    _current_state = false;
-	if(Type) _current_state = !_current_state;
+    // Read the real pin instead of assuming "released": blindly guessing
+    // (and, for Inverted, guessing wrong) meant every rebind - every boot,
+    // every Blinds settings save via InvertButtons() - forced a fake
+    // "pressed" state that would "release" (and fire OnPressed, which
+    // triggers on that edge) ~FilterDelay later even though nobody touched
+    // the button.
+    bool pinVal = digitalRead(_Pin);
+    if(Type) pinVal = !pinVal;
+
+    _current_state = pinVal;
 	_time = millis();
 	_last_state = _current_state;
 	_changed = false;

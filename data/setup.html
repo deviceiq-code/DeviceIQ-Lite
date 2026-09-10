@@ -23,6 +23,10 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                 <span>Users</span>
             </a>
+            <a href="/log.html" class="sidebar-nav-item" id="log-link">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                <span>Log</span>
+            </a>
             <a href="/about.html" class="sidebar-nav-item">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                 <span>About</span>
@@ -130,6 +134,15 @@
                     ]
                 },
                 {
+                    title: "Left Blind Pins",
+                    fields: [
+                        { key: "Left Button Open Pin", label: "Open Button Pin", desc: "GPIO number wired to the open button. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Left Button Close Pin", label: "Close Button Pin", desc: "GPIO number wired to the close button. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Left Switch Open Pin", label: "Open Relay Pin", desc: "GPIO number driving the open direction relay. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Left Switch Close Pin", label: "Close Relay Pin", desc: "GPIO number driving the close direction relay. Requires a restart.", type: "number", min: 0, max: 16 }
+                    ]
+                },
+                {
                     title: "Right Blind",
                     fields: [
                         { key: "Right Name", label: "Name", type: "text" },
@@ -138,18 +151,16 @@
                         { key: "Right Button Close", label: "Close Button Enabled", type: "bool" },
                         { key: "Right Invert Buttons", label: "Invert Buttons", type: "bool" }
                     ]
+                },
+                {
+                    title: "Right Blind Pins",
+                    fields: [
+                        { key: "Right Button Open Pin", label: "Open Button Pin", desc: "GPIO number wired to the open button. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Right Button Close Pin", label: "Close Button Pin", desc: "GPIO number wired to the close button. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Right Switch Open Pin", label: "Open Relay Pin", desc: "GPIO number driving the open direction relay. Requires a restart.", type: "number", min: 0, max: 16 },
+                        { key: "Right Switch Close Pin", label: "Close Relay Pin", desc: "GPIO number driving the close direction relay. Requires a restart.", type: "number", min: 0, max: 16 }
+                    ]
                 }
-            ]
-        },
-        {
-            id: "Log", title: "Log",
-            desc: "Where device logs are sent and how much detail they include.",
-            note: "Changes require a restart.",
-            fields: [
-                { key: "Endpoint", label: "Endpoint", desc: "Where log messages are delivered.", type: "flags", options: [["Serial", 1], ["Syslog", 2], ["File", 4]] },
-                { key: "Level", label: "Level", desc: "Which severities are logged.", type: "flags", options: [["Error", 1], ["Warning", 2], ["Information", 4], ["Debug", 8]] },
-                { key: "Syslog Server", label: "Syslog Server", desc: "Syslog server, used when Syslog is enabled above.", type: "text" },
-                { key: "Syslog Port", label: "Syslog Port", type: "number", min: 1, max: 65535 }
             ]
         },
         {
@@ -315,6 +326,16 @@
 
                 card.appendChild(list);
             }
+        },
+        {
+            id: "Log", title: "Log",
+            desc: "Where device logs are sent and how much detail they include.",
+            fields: [
+                { key: "Endpoint", label: "Endpoint", desc: "Where log messages are delivered.", type: "flags", options: [["Serial", 1], ["Syslog", 2], ["File", 4]] },
+                { key: "Level", label: "Level", desc: "Which severities are logged.", type: "flags", options: [["Error", 1], ["Warning", 2], ["Information", 4], ["Debug", 8]] },
+                { key: "Syslog Server", label: "Syslog Server", desc: "Syslog server hostname, used when Syslog is enabled above.", type: "text" },
+                { key: "Syslog Port", label: "Syslog Port", desc: "Syslog server port.", type: "number", min: 1, max: 65535 }
+            ]
         }
     ];
 
@@ -634,7 +655,7 @@
         const title = document.createElement("h2");
         title.textContent = "Configuration";
         const desc = document.createElement("p");
-        desc.textContent = "Back up or restore the configuration, restart the device, or restore factory defaults.";
+        desc.textContent = "Back up, restore, or reset the device configuration.";
         header.appendChild(title);
         header.appendChild(desc);
         card.appendChild(header);
@@ -744,7 +765,7 @@
 
         const resetRow = settingsRow(
             "Restore Factory Defaults",
-            "Erases all settings, including WiFi credentials and accounts, and restarts the device. This cannot be undone."
+            "Erases all user-defined settings and components and restores factory defaults. We recommend exporting a backup of the current configuration first."
         );
         const resetButton = document.createElement("button");
         resetButton.type = "button";
@@ -885,6 +906,7 @@
         document.title = session.productFamily + " [" + session.hostname + "] - Setup";
         document.getElementById("sidebar-product").textContent = session.productFamily + " " + session.productName;
         document.getElementById("sidebar-version").textContent = "v" + session.softwareVersion;
+        if (!session.logFileEnabled) document.getElementById("log-link").remove();
         return fetch("/api/settings");
     }).then(function (response) { return response.json(); })
         .then(function (settings) { render(settings); })
