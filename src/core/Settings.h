@@ -86,7 +86,10 @@ class settings {
         uint16_t mNetwork_FallbackAPRetention = Defaults.Network.FallbackAPRetention;
         bool mAP_Mode = false;
 
-        IPAddress mSyslog_Server = Defaults.Log.SyslogServer;
+        // Hostname or a plain IP, resolved at send time by Logger's own
+        // ResolveSyslogAddress() - not restricted to dotted-decimal like an
+        // IPAddress, so a typed hostname is never silently dropped on save.
+        String mSyslog_Server = Defaults.Log.SyslogServer;
         uint16_t mSyslog_Port = Defaults.Log.SyslogPort;
         uint8_t mLog_Endpoint = Defaults.Log.Endpoint;
         uint8_t mLog_Level = Defaults.Log.Level;
@@ -152,8 +155,11 @@ class settings {
         inline bool AP_Mode() { return mAP_Mode; }
         inline void AP_Mode(bool Value) { mAP_Mode = Value; }
 
-        inline IPAddress Syslog_Server() { return mSyslog_Server; }
-        inline void Syslog_Server(IPAddress Server) { mSyslog_Server = Server; }
+        inline String Syslog_Server() { return mSyslog_Server; }
+        // Hostname or a plain IP, resolved at send time (Logger's own
+        // ResolveSyslogAddress()) - not restricted to dotted-decimal like an
+        // IPAddress, so a typed hostname is never silently dropped on save.
+        inline void Syslog_Server(String Server) { mSyslog_Server = Server.substring(0, 64); }
         inline uint16_t Syslog_Port() { return mSyslog_Port; }
         inline void Syslog_Port(uint16_t Port) { mSyslog_Port = Port; }
         inline uint8_t Log_Endpoint() { return mLog_Endpoint; }

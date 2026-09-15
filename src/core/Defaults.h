@@ -17,8 +17,8 @@ struct defaults {
         const char* Netmask = "255.255.255.0";
         const char* DNS1 = "8.8.8.8";
         const char* DNS2 = "8.8.4.4";
-        const char* SSID = "IOT-3";
-        const char* Passphrase = "1921682GenesisIOT-3";
+        const char* SSID = "IOT-2";
+        const char* Passphrase = "1921682GenesisIOT-2";
         const uint16_t ConnectionTimeout = 30;
         const bool ReconnectEnabled = true;
         const uint16_t ReconnectInitialInterval = 5;
@@ -50,11 +50,13 @@ struct defaults {
         } User;
     } Users;
     struct log {
-        const IPAddress SyslogServer = IPAddress(192, 168, 4, 100);
+        // Empty by default (disabled), same convention as MQTT.Broker below
+        // - a hostname or IP, resolved at send time (see Logger::Syslog_Server).
+        const char* SyslogServer = "syslog.svr";
         const uint16_t SyslogPort = 514;
         // Matches Lite's previous unconditional behavior: Serial + Syslog,
         // everything logged.
-        const uint8_t Endpoint = logger::Endpoints::Serial | logger::Endpoints::Syslog;
+        const uint8_t Endpoint = logger::Endpoints::Serial | logger::Endpoints::File;
         const uint8_t Level = logger::LogLevels::All;
     } Log;
     struct general {

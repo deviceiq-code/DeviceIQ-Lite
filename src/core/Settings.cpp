@@ -154,7 +154,7 @@ bool settings::Load(const String& ConfigFileName) {
     }
 
     JsonObjectConst log = root["Log"];
-    mSyslog_Server = ParseIP(log, "Syslog Server", Defaults.Log.SyslogServer);
+    mSyslog_Server = String((const char*)(log["Syslog Server"] | Defaults.Log.SyslogServer));
     mSyslog_Port = log["Syslog Port"] | Defaults.Log.SyslogPort;
     if(!log["Endpoint"].isNull()) {
         mLog_Endpoint = log["Endpoint"] | Defaults.Log.Endpoint;
@@ -240,7 +240,7 @@ bool settings::Save(const String& ConfigFileName) {
     });
 
     JsonObject log = doc["Log"].to<JsonObject>();
-    log["Syslog Server"] = mSyslog_Server.toString();
+    log["Syslog Server"] = mSyslog_Server;
     log["Syslog Port"] = mSyslog_Port;
     log["Endpoint"] = mLog_Endpoint;
     log["Level"] = mLog_Level;

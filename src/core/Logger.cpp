@@ -65,9 +65,26 @@ void logger::LogToFile(const String& Message, LogLevels MessageLevel) {
     LogFile.close();
 }
 
+bool logger::ResolveSyslogAddress() {
+    if(mSyslogAddressValid) return true;
+
+    if(mSyslogAddress.fromString(mSyslogServerHost)) {
+        mSyslogAddressValid = true;
+        return true;
+    }
+
+    IPAddress Resolved;
+    if(!WiFi.hostByName(mSyslogServerHost.c_str(), Resolved)) return false;
+
+    mSyslogAddress = Resolved;
+    mSyslogAddressValid = true;
+    return true;
+}
+
 void logger::LogToSyslog(const String& Message, LogLevels MessageLevel) {
-    if(mSyslogServer == IPAddress(0, 0, 0, 0) || mSyslogPort == 0) return;
+    if(mSyslogServerHost.length() == 0 || mSyslogPort == 0) return;
     if(WiFi.status() != WL_CONNECTED) return;
+    if(!ResolveSyslogAddress()) return;
 
     if(!mUdpReady) {
         if(!mUdpClient.begin(0)) return;
@@ -104,7 +121,7 @@ void logger::LogToSyslog(const String& Message, LogLevels MessageLevel) {
     Packet += " " + String(Version::ProductFamily) + " - - - ";
     Packet += Message;
 
-    if(!mUdpClient.beginPacket(mSyslogServer, mSyslogPort)) { mUdpClient.stop(); mUdpReady = false; return; }
+    if(!mUdpClient.beginPacket(mSyslogAddress, mSyslogPort)) { mUdpClient.stop(); mUdpReady = false; return; }
     mUdpClient.write((const uint8_t*)Packet.c_str(), Packet.length());
     if(!mUdpClient.endPacket()) { mUdpClient.stop(); mUdpReady = false; }
 }
