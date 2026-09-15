@@ -219,6 +219,15 @@ class settings {
         // ComponentConfig.cpp.
         bool SetComponentProperty(int16_t ID, const String& Property, const String& Value, String& Error);
 
+        // Adding, editing and removing components via the Web UI (dashboard's
+        // "+"/gear/trash and component.html). Unlike SetComponentProperty(),
+        // none of these touch the live ComponentManager - they only edit
+        // config.json, so a restart is required to apply them. Implemented
+        // in ComponentConfig.cpp.
+        bool AddComponent(const String& ClassName, const String& Name, int Address, int16_t RelayOpen, int16_t RelayClose, int16_t& NewID, String& Error);
+        bool UpdateComponent(int16_t ID, JsonObjectConst Fields, String& Error);
+        bool RemoveComponent(int16_t ID, String& Error);
+
         void FactoryReset();
         void CheckButtonsFactoryReset();
 };

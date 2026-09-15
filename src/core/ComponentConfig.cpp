@@ -298,6 +298,125 @@ namespace {
 
         return true;
     }
+
+    struct Identity {
+        String name;
+        int16_t id;
+        uint8_t address;
+        component::Classes type;
+        bool hasAddress;
+    };
+
+    // Validates every component entry in `components` - identity (Setup
+    // parses per its class), duplicate name/GPIO address, and Blinds
+    // membership integrity (referenced Relay/Button exists, isn't shared
+    // between two Blinds groups) - without constructing anything. Shared by
+    // InstallComponents() (boot-time, validates the whole file) and by
+    // settings::AddComponent()/UpdateComponent() (validates a prospective
+    // change before it's saved to config.json). `identities`/`owners` must
+    // each have room for MaxConfiguredComponents entries.
+    bool ValidateComponentsCatalog(JsonObjectConst components, Identity identities[], int16_t owners[], size_t& count, String& error) {
+        count = 0;
+        if(components.isNull() || components.size() > MaxConfiguredComponents) {
+            error = "Components must be an object with at most " + String(MaxConfiguredComponents) + " entries";
+            return false;
+        }
+
+        for(JsonPairConst entry : components) {
+            int16_t configuredID = 0;
+            if(!ParseComponentID(entry.key().c_str(), configuredID) || !entry.value().is<JsonObjectConst>()) {
+                error = "invalid component key '" + String(entry.key().c_str()) + "'";
+                return false;
+            }
+            JsonObjectConst object = entry.value().as<JsonObjectConst>();
+            if(!HasComponentSections(object)) {
+                error = "component #" + String(configuredID) + ": expected Setup and Properties sections";
+                return false;
+            }
+            JsonObjectConst setup = ComponentSetup(object);
+            if(!setup["Class"].is<const char*>()) {
+                error = "component #" + String(configuredID) + ": Setup.Class is required";
+                return false;
+            }
+
+            String componentClass = setup["Class"].as<const char*>();
+            if(componentClass.equalsIgnoreCase("Relay")) {
+                RelayConfig config;
+                if(!ParseRelayConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Relay configuration"; return false; }
+                identities[count] = {config.name, config.id, config.address, component::Classes::Relay, true};
+            } else if(componentClass.equalsIgnoreCase("Button")) {
+                ButtonConfig config;
+                if(!ParseButtonConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Button configuration"; return false; }
+                identities[count] = {config.name, config.id, config.address, component::Classes::Button, true};
+            } else if(componentClass.equalsIgnoreCase("Thermometer")) {
+                ThermometerConfig config;
+                if(!ParseThermometerConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Thermometer configuration"; return false; }
+                identities[count] = {config.name, config.id, config.address, component::Classes::Thermometer, true};
+            } else if(componentClass.equalsIgnoreCase("Blinds")) {
+                BlindsConfig config;
+                if(!ParseBlindsConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Blinds configuration"; return false; }
+                identities[count] = {config.name, config.id, 0, component::Classes::Blinds, false};
+            } else {
+                error = "component #" + String(configuredID) + ": unsupported class '" + componentClass + "'";
+                return false;
+            }
+
+            for(size_t previous = 0; previous < count; previous++) {
+                if(identities[previous].name.equalsIgnoreCase(identities[count].name) ||
+                   (identities[previous].hasAddress && identities[count].hasAddress && identities[previous].address == identities[count].address)) {
+                    error = "duplicate name or GPIO address for component #" + String(configuredID);
+                    return false;
+                }
+            }
+
+            owners[count] = -1;
+            count++;
+        }
+
+        auto resolveMember = [&](int16_t selector, component::Classes expected) -> int16_t {
+            for(size_t candidate = 0; candidate < count; candidate++) {
+                if(identities[candidate].type == expected && identities[candidate].id == selector) return (int16_t)candidate;
+            }
+            return -1;
+        };
+
+        // Validate Blinds membership (relay/button references) after every
+        // identity is known, so ordering in the file doesn't matter.
+        for(JsonPairConst entry : components) {
+            int16_t configuredID = 0;
+            ParseComponentID(entry.key().c_str(), configuredID);
+            JsonObjectConst object = entry.value().as<JsonObjectConst>();
+            String componentClass = ComponentSetup(object)["Class"].as<const char*>();
+            if(!componentClass.equalsIgnoreCase("Blinds")) continue;
+
+            BlindsConfig config;
+            if(!ParseBlindsConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Blinds configuration"; return false; }
+            int16_t blindsIndex = resolveMember(configuredID, component::Classes::Blinds);
+            int16_t relayOpen = resolveMember(config.relayOpen, component::Classes::Relay);
+            int16_t relayClose = resolveMember(config.relayClose, component::Classes::Relay);
+            int16_t buttonOpen = config.buttonOpen == 0 ? -1 : resolveMember(config.buttonOpen, component::Classes::Button);
+            int16_t buttonClose = config.buttonClose == 0 ? -1 : resolveMember(config.buttonClose, component::Classes::Button);
+
+            if(relayOpen < 0 || relayClose < 0 || relayOpen == relayClose ||
+               (config.buttonOpen != 0 && buttonOpen < 0) || (config.buttonClose != 0 && buttonClose < 0) ||
+               (buttonOpen >= 0 && buttonOpen == buttonClose)) {
+                error = "component #" + String(configuredID) + ": Blinds references an unresolved or conflicting member component";
+                return false;
+            }
+
+            const int16_t members[] = {relayOpen, relayClose, buttonOpen, buttonClose};
+            for(int16_t member : members) {
+                if(member < 0) continue;
+                if(owners[member] >= 0) {
+                    error = "component is referenced by more than one Blinds group";
+                    return false;
+                }
+                owners[member] = blindsIndex;
+            }
+        }
+
+        return true;
+    }
 }
 
 bool settings::InstallComponents(const String& ConfigFileName) {
@@ -343,114 +462,14 @@ bool settings::InstallComponents(const String& ConfigFileName) {
     }
 
     JsonObjectConst components = doc["Components"].as<JsonObjectConst>();
-    if(components.isNull() || components.size() > MaxConfiguredComponents) {
-        Logger.Write("Components installation failed: Components must be an object with at most " + String(MaxConfiguredComponents) + " entries", logger::Error);
-        return false;
-    }
-
-    struct Identity {
-        String name;
-        int16_t id;
-        uint8_t address;
-        component::Classes type;
-        bool hasAddress;
-    };
 
     Identity identities[MaxConfiguredComponents];
     int16_t owners[MaxConfiguredComponents];
     size_t count = 0;
-
-    for(JsonPairConst entry : components) {
-        int16_t configuredID = 0;
-        if(!ParseComponentID(entry.key().c_str(), configuredID) || !entry.value().is<JsonObjectConst>()) {
-            Logger.Write("Components installation failed: invalid component key '" + String(entry.key().c_str()) + "'", logger::Error);
-            return false;
-        }
-        JsonObjectConst object = entry.value().as<JsonObjectConst>();
-        if(!HasComponentSections(object)) {
-            Logger.Write("Component #" + String(configuredID) + ": expected Setup and Properties sections", logger::Error);
-            return false;
-        }
-        JsonObjectConst setup = ComponentSetup(object);
-        if(!setup["Class"].is<const char*>()) {
-            Logger.Write("Component #" + String(configuredID) + ": Setup.Class is required", logger::Error);
-            return false;
-        }
-
-        String componentClass = setup["Class"].as<const char*>();
-        if(componentClass.equalsIgnoreCase("Relay")) {
-            RelayConfig config;
-            if(!ParseRelayConfig(object, configuredID, config)) { Logger.Write("Component #" + String(configuredID) + ": invalid Relay configuration", logger::Error); return false; }
-            identities[count] = {config.name, config.id, config.address, component::Classes::Relay, true};
-        } else if(componentClass.equalsIgnoreCase("Button")) {
-            ButtonConfig config;
-            if(!ParseButtonConfig(object, configuredID, config)) { Logger.Write("Component #" + String(configuredID) + ": invalid Button configuration", logger::Error); return false; }
-            identities[count] = {config.name, config.id, config.address, component::Classes::Button, true};
-        } else if(componentClass.equalsIgnoreCase("Thermometer")) {
-            ThermometerConfig config;
-            if(!ParseThermometerConfig(object, configuredID, config)) { Logger.Write("Component #" + String(configuredID) + ": invalid Thermometer configuration", logger::Error); return false; }
-            identities[count] = {config.name, config.id, config.address, component::Classes::Thermometer, true};
-        } else if(componentClass.equalsIgnoreCase("Blinds")) {
-            BlindsConfig config;
-            if(!ParseBlindsConfig(object, configuredID, config)) { Logger.Write("Component #" + String(configuredID) + ": invalid Blinds configuration", logger::Error); return false; }
-            identities[count] = {config.name, config.id, 0, component::Classes::Blinds, false};
-        } else {
-            Logger.Write("Component #" + String(configuredID) + ": unsupported class '" + componentClass + "'", logger::Error);
-            return false;
-        }
-
-        for(size_t previous = 0; previous < count; previous++) {
-            if(identities[previous].name.equalsIgnoreCase(identities[count].name) ||
-               (identities[previous].hasAddress && identities[count].hasAddress && identities[previous].address == identities[count].address)) {
-                Logger.Write("Components installation failed: duplicate name or GPIO address for component #" + String(configuredID), logger::Error);
-                return false;
-            }
-        }
-
-        owners[count] = -1;
-        count++;
-    }
-
-    auto resolveMember = [&](int16_t selector, component::Classes expected) -> int16_t {
-        for(size_t candidate = 0; candidate < count; candidate++) {
-            if(identities[candidate].type == expected && identities[candidate].id == selector) return (int16_t)candidate;
-        }
-        return -1;
-    };
-
-    // Validate Blinds membership (relay/button references) before
-    // constructing anything.
-    for(JsonPairConst entry : components) {
-        int16_t configuredID = 0;
-        ParseComponentID(entry.key().c_str(), configuredID);
-        JsonObjectConst object = entry.value().as<JsonObjectConst>();
-        String componentClass = ComponentSetup(object)["Class"].as<const char*>();
-        if(!componentClass.equalsIgnoreCase("Blinds")) continue;
-
-        BlindsConfig config;
-        if(!ParseBlindsConfig(object, configuredID, config)) return false;
-        int16_t blindsIndex = resolveMember(configuredID, component::Classes::Blinds);
-        int16_t relayOpen = resolveMember(config.relayOpen, component::Classes::Relay);
-        int16_t relayClose = resolveMember(config.relayClose, component::Classes::Relay);
-        int16_t buttonOpen = config.buttonOpen == 0 ? -1 : resolveMember(config.buttonOpen, component::Classes::Button);
-        int16_t buttonClose = config.buttonClose == 0 ? -1 : resolveMember(config.buttonClose, component::Classes::Button);
-
-        if(relayOpen < 0 || relayClose < 0 || relayOpen == relayClose ||
-           (config.buttonOpen != 0 && buttonOpen < 0) || (config.buttonClose != 0 && buttonClose < 0) ||
-           (buttonOpen >= 0 && buttonOpen == buttonClose)) {
-            Logger.Write("Component #" + String(configuredID) + ": Blinds references an unresolved or conflicting member component", logger::Error);
-            return false;
-        }
-
-        const int16_t members[] = {relayOpen, relayClose, buttonOpen, buttonClose};
-        for(int16_t member : members) {
-            if(member < 0) continue;
-            if(owners[member] >= 0) {
-                Logger.Write("Components installation failed: component is referenced by more than one Blinds group", logger::Error);
-                return false;
-            }
-            owners[member] = blindsIndex;
-        }
+    String validationError;
+    if(!ValidateComponentsCatalog(components, identities, owners, count, validationError)) {
+        Logger.Write("Components installation failed: " + validationError, logger::Error);
+        return false;
     }
 
     // Construct physical components first (Relay/Button/Thermometer), so
@@ -483,6 +502,13 @@ bool settings::InstallComponents(const String& ConfigFileName) {
         }
         index++;
     }
+
+    auto resolveMember = [&](int16_t selector, component::Classes expected) -> int16_t {
+        for(size_t candidate = 0; candidate < count; candidate++) {
+            if(identities[candidate].type == expected && identities[candidate].id == selector) return (int16_t)candidate;
+        }
+        return -1;
+    };
 
     index = 0;
     for(JsonPairConst entry : components) {
@@ -654,6 +680,26 @@ bool settings::SetComponentProperty(int16_t ID, const String& Property, const St
     component* target = Components.FindByID(ID);
     if(target == nullptr) { Error = "component not found"; return false; }
 
+    // Live-only: reflected in state.json via the normal periodic save
+    // (ComponentManager::PersistenceRequired()) rather than written back
+    // into config.json here - same split Blinds.Position already used via
+    // /api/blinds, now shared by the Dashboard's Relay toggle and Blinds
+    // Open/Stop/Close controls (both now go through this single endpoint).
+    if(target->Class() == component::Classes::Relay && Property.equalsIgnoreCase("State")) {
+        bool boolValue = false;
+        if(!ParseConfigBool(Value, boolValue)) { Error = "invalid value"; return false; }
+        static_cast<relay&>(*target).SetState(boolValue);
+        return true;
+    }
+    if(target->Class() == component::Classes::Blinds && Property.equalsIgnoreCase("State")) {
+        blinds& target_blinds = static_cast<blinds&>(*target);
+        if(Value.equalsIgnoreCase("open")) target_blinds.Open();
+        else if(Value.equalsIgnoreCase("close")) target_blinds.Close();
+        else if(Value.equalsIgnoreCase("stop")) target_blinds.Stop();
+        else { Error = "invalid value"; return false; }
+        return true;
+    }
+
     bool boolValue = false;
     long numericValue = 0;
 
@@ -698,5 +744,192 @@ bool settings::SetComponentProperty(int16_t ID, const String& Property, const St
         }
     }
 
+    return true;
+}
+
+// Creates a new config.json entry - only the identity fields validation
+// depends on (Name, and either Address or RelayOpen/RelayClose) are set
+// here; everything else follows via a separate UpdateComponent() call, same
+// two-step split the original DeviceIQ web API uses. Like every other
+// component mutation, this only edits config.json - it never touches the
+// live ComponentManager, so a restart is required to apply it.
+bool settings::AddComponent(const String& ClassName, const String& Name, int Address, int16_t RelayOpen, int16_t RelayClose, int16_t& NewID, String& Error) {
+    if(!ClassName.equalsIgnoreCase("Relay") && !ClassName.equalsIgnoreCase("Button") &&
+       !ClassName.equalsIgnoreCase("Thermometer") && !ClassName.equalsIgnoreCase("Blinds")) {
+        Error = "unsupported component class";
+        return false;
+    }
+
+    String name = Name;
+    name.trim();
+    if(name.isEmpty()) { Error = "name is required"; return false; }
+
+    JsonDocument doc;
+    File file = LittleFS.open(CONFIG_FILE_NAME, "r");
+    if(!file) { Error = "unable to read configuration"; return false; }
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if(err) { Error = "invalid configuration file"; return false; }
+
+    JsonObject components = doc["Components"].as<JsonObject>();
+    if(components.isNull()) { Error = "invalid configuration file"; return false; }
+
+    // Lowest unused ID, same approach as the original DeviceIQ's web API.
+    int16_t newID = 0;
+    for(int16_t candidate = 1; candidate <= INT16_MAX; candidate++) {
+        if(components[String(candidate)].isNull()) { newID = candidate; break; }
+    }
+    if(newID == 0) { Error = "maximum component count reached"; return false; }
+
+    JsonObject item = components[String(newID)].to<JsonObject>();
+    JsonObject setup = item["Setup"].to<JsonObject>();
+    setup["Name"] = name;
+    setup["Class"] = ClassName;
+    JsonObject properties = item["Properties"].to<JsonObject>();
+    properties["Enabled"] = true;
+
+    if(ClassName.equalsIgnoreCase("Blinds")) {
+        setup["RelayOpen"] = RelayOpen;
+        setup["RelayClose"] = RelayClose;
+        properties["Position"] = 0;
+    } else {
+        setup["Address"] = Address;
+        if(ClassName.equalsIgnoreCase("Relay")) properties["State"] = false;
+    }
+
+    Identity identities[MaxConfiguredComponents];
+    int16_t owners[MaxConfiguredComponents];
+    size_t count = 0;
+    if(!ValidateComponentsCatalog(components, identities, owners, count, Error)) {
+        components.remove(String(newID));
+        return false;
+    }
+
+    File outFile = LittleFS.open(CONFIG_FILE_NAME, "w");
+    if(!outFile) { Error = "unable to save configuration"; return false; }
+    bool saved = serializeJsonPretty(doc, outFile) > 0;
+    outFile.close();
+    if(!saved) { Error = "unable to save configuration"; return false; }
+
+    Logger.Write("Added component #" + String(newID) + " (" + ClassName + " '" + name + "') to " + String(CONFIG_FILE_NAME) + " - restart required to apply");
+    NewID = newID;
+    return true;
+}
+
+// Applies a set of Setup/Properties field changes to an existing config.json
+// entry (Fields keys are lowercase, matching the web form's field names -
+// see the /api/components/update handler in main.cpp). Unlike
+// SetComponentProperty(), this never touches the live component - every
+// field here (including ones SetComponentProperty can also apply live, like
+// Enabled) only takes effect after a restart, same as AddComponent()/
+// RemoveComponent().
+bool settings::UpdateComponent(int16_t ID, JsonObjectConst Fields, String& Error) {
+    JsonDocument doc;
+    File file = LittleFS.open(CONFIG_FILE_NAME, "r");
+    if(!file) { Error = "unable to read configuration"; return false; }
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if(err) { Error = "invalid configuration file"; return false; }
+
+    JsonObject components = doc["Components"].as<JsonObject>();
+    JsonObject item = components.isNull() ? JsonObject() : components[String(ID)].as<JsonObject>();
+    if(item.isNull()) { Error = "component not found"; return false; }
+
+    JsonObject setup = item["Setup"].as<JsonObject>();
+    JsonObject properties = item["Properties"].as<JsonObject>();
+    String componentClass = setup["Class"] | "";
+
+    auto has = [&](const char* key) { return !Fields[key].isNull(); };
+    auto text = [&](const char* key) { return Fields[key].as<String>(); };
+
+    if(has("name")) {
+        String name = text("name");
+        name.trim();
+        setup["Name"] = name;
+    }
+    if(has("enabled")) properties["Enabled"] = text("enabled").equalsIgnoreCase("true");
+
+    if(componentClass.equalsIgnoreCase("Relay")) {
+        if(has("address")) setup["Address"] = text("address").toInt();
+        if(has("type")) setup["Type"] = text("type");
+        if(has("drivemode")) setup["DriveMode"] = text("drivemode");
+        if(has("pulsetimems")) setup["PulseTimeMs"] = (uint32_t)text("pulsetimems").toInt();
+    } else if(componentClass.equalsIgnoreCase("Button")) {
+        if(has("address")) setup["Address"] = text("address").toInt();
+        if(has("activelevel")) setup["ActiveLevel"] = text("activelevel");
+        if(has("inputmode")) setup["InputMode"] = text("inputmode");
+        if(has("debouncetimems")) setup["DebounceTimeMs"] = (uint32_t)text("debouncetimems").toInt();
+        if(has("longclicktimems")) setup["LongClickTimeMs"] = (uint32_t)text("longclicktimems").toInt();
+        if(has("multiclicktimems")) setup["MultiClickTimeMs"] = (uint32_t)text("multiclicktimems").toInt();
+    } else if(componentClass.equalsIgnoreCase("Thermometer")) {
+        if(has("address")) setup["Address"] = text("address").toInt();
+        if(has("type")) setup["Type"] = text("type");
+        if(has("pollingintervalms")) setup["PollingIntervalMs"] = (uint32_t)text("pollingintervalms").toInt();
+    } else if(componentClass.equalsIgnoreCase("Blinds")) {
+        if(has("relayopen")) setup["RelayOpen"] = text("relayopen").toInt();
+        if(has("relayclose")) setup["RelayClose"] = text("relayclose").toInt();
+        if(has("buttonopen")) setup["ButtonOpen"] = text("buttonopen").toInt();
+        if(has("buttonclose")) setup["ButtonClose"] = text("buttonclose").toInt();
+        if(has("steptimems")) setup["StepTimeMs"] = (uint32_t)text("steptimems").toInt();
+    }
+
+    Identity identities[MaxConfiguredComponents];
+    int16_t owners[MaxConfiguredComponents];
+    size_t count = 0;
+    if(!ValidateComponentsCatalog(components, identities, owners, count, Error)) return false;
+
+    File outFile = LittleFS.open(CONFIG_FILE_NAME, "w");
+    if(!outFile) { Error = "unable to save configuration"; return false; }
+    bool saved = serializeJsonPretty(doc, outFile) > 0;
+    outFile.close();
+    if(!saved) { Error = "unable to save configuration"; return false; }
+
+    Logger.Write("Updated component #" + String(ID) + " in " + String(CONFIG_FILE_NAME) + " - restart required to apply");
+    return true;
+}
+
+// Deletes a config.json entry outright. Refuses to remove a component that's
+// still a Blinds group's member (RelayOpen/RelayClose/ButtonOpen/
+// ButtonClose) - same ownership rule InstallComponents()/
+// ValidateComponentsCatalog() enforce at boot; the Blinds group has to be
+// removed first. Like AddComponent()/UpdateComponent(), a restart is
+// required to apply the removal.
+bool settings::RemoveComponent(int16_t ID, String& Error) {
+    JsonDocument doc;
+    File file = LittleFS.open(CONFIG_FILE_NAME, "r");
+    if(!file) { Error = "unable to read configuration"; return false; }
+    DeserializationError err = deserializeJson(doc, file);
+    file.close();
+    if(err) { Error = "invalid configuration file"; return false; }
+
+    JsonObject components = doc["Components"].as<JsonObject>();
+    if(components.isNull() || components[String(ID)].isNull()) { Error = "component not found"; return false; }
+
+    for(JsonPair entry : components) {
+        JsonObjectConst object = entry.value().as<JsonObjectConst>();
+        JsonObjectConst setup = object["Setup"].as<JsonObjectConst>();
+        String componentClass = setup["Class"] | "";
+        if(!componentClass.equalsIgnoreCase("Blinds")) continue;
+
+        int relayOpen = setup["RelayOpen"] | 0;
+        int relayClose = setup["RelayClose"] | 0;
+        int buttonOpen = setup["ButtonOpen"] | 0;
+        int buttonClose = setup["ButtonClose"] | 0;
+        if(relayOpen == ID || relayClose == ID || buttonOpen == ID || buttonClose == ID) {
+            String blindsName = setup["Name"] | "another component";
+            Error = "component is used by Blinds '" + blindsName + "' - remove that first";
+            return false;
+        }
+    }
+
+    components.remove(String(ID));
+
+    File outFile = LittleFS.open(CONFIG_FILE_NAME, "w");
+    if(!outFile) { Error = "unable to save configuration"; return false; }
+    bool saved = serializeJsonPretty(doc, outFile) > 0;
+    outFile.close();
+    if(!saved) { Error = "unable to save configuration"; return false; }
+
+    Logger.Write("Removed component #" + String(ID) + " from " + String(CONFIG_FILE_NAME) + " - restart required to apply");
     return true;
 }

@@ -392,6 +392,11 @@ void setup() {
     Logger.Write("Web GET " + request->url());
   });
 
+  Webserver->on("/component.html", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/component.html", "text/html");
+    Logger.Write("Web GET " + request->url());
+  });
+
   Webserver->on("/setup.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/setup.html", "text/html");
     Logger.Write("Web GET " + request->url());
@@ -410,6 +415,25 @@ void setup() {
   Webserver->on("/log.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/log.html", "text/html");
     Logger.Write("Web GET " + request->url());
+  });
+
+  // Registered before the plain "/api/log" GET below: ESPAsyncWebServer's
+  // default URI matching treats "/api/log" as matching both an exact
+  // request and any path starting with "/api/log/" (its "backward
+  // compatible" matcher), and handlers are tried in registration order -
+  // registered after, "/api/log/export" would never be reached, every
+  // request to it swallowed by "/api/log" first (same hazard the
+  // /api/components/* routes above are ordered to avoid).
+  Webserver->on("/api/log/export", HTTP_GET, [](AsyncWebServerRequest *request){
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    AsyncWebServerResponse *response = LittleFS.exists(LOG_FILE_NAME)
+      ? request->beginResponse(LittleFS, LOG_FILE_NAME, "text/plain")
+      : request->beginResponse(200, "text/plain", "");
+    response->addHeader("Content-Disposition", "attachment; filename=\"device.log\"");
+    request->send(response);
+    Logger.Write("Web GET " + request->url() + " - Log exported (" + session->Username + ")");
   });
 
   Webserver->on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -447,18 +471,6 @@ void setup() {
     }
 
     request->send(200, "text/plain", content.substring(start));
-  });
-
-  Webserver->on("/api/log/export", HTTP_GET, [](AsyncWebServerRequest *request){
-    WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
-
-    AsyncWebServerResponse *response = LittleFS.exists(LOG_FILE_NAME)
-      ? request->beginResponse(LittleFS, LOG_FILE_NAME, "text/plain")
-      : request->beginResponse(200, "text/plain", "");
-    response->addHeader("Content-Disposition", "attachment; filename=\"device.log\"");
-    request->send(response);
-    Logger.Write("Web GET " + request->url() + " - Log exported (" + session->Username + ")");
   });
 
   Webserver->on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request){
@@ -543,14 +555,158 @@ void setup() {
     request->send(response);
   });
 
-  // Admin-only view/toggle of every configured component (Relay/Button/
-  // Thermometer/Blinds), backing setup.html's Components panel. Adding,
-  // removing or rewiring components is still done via config.json import -
-  // this only lists what's live and lets a handful of safe properties be
-  // changed without a restart.
-  Webserver->on("/api/components", HTTP_GET, [](AsyncWebServerRequest *request) {
+  // These four routes must be registered before the plain "/api/components"
+  // GET/POST handlers below: ESPAsyncWebServer's default URI matching is
+  // "backward compatible" (AsyncURIMatcher::Type::BackwardCompatible) -
+  // "/api/components" matches an exact request to "/api/components" *and*
+  // anything starting with "/api/components/", and handlers are tried in
+  // registration order. Registered after, these would never be reached -
+  // every request to them would be swallowed by "/api/components" first.
+
+  // Backs component.html's Add/Edit form: with no params, every configured
+  // component (id/name/class only, including private Blinds members) - used
+  // to populate the Relay/Button selectors when adding or editing a Blinds
+  // group. With ?id=, one component's full Setup - used to prefill the Edit
+  // form.
+  Webserver->on("/api/components/catalog", HTTP_GET, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
     if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    File file = LittleFS.open(CONFIG_FILE_NAME, "r");
+    JsonDocument doc;
+    if(file) { deserializeJson(doc, file); file.close(); }
+    JsonObjectConst components = doc["Components"].as<JsonObjectConst>();
+
+    JsonDocument response;
+    if(request->hasParam("id")) {
+      int16_t id = (int16_t)request->getParam("id")->value().toInt();
+      JsonObjectConst item = components.isNull() ? JsonObjectConst() : components[String(id)].as<JsonObjectConst>();
+      if(item.isNull()) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
+
+      response["id"] = id;
+      response["setup"] = item["Setup"];
+      response["enabled"] = item["Properties"]["Enabled"] | true;
+    } else {
+      JsonArray items = response["components"].to<JsonArray>();
+      if(!components.isNull()) {
+        for(JsonPairConst entry : components) {
+          JsonObjectConst setup = entry.value()["Setup"].as<JsonObjectConst>();
+          JsonObject out = items.add<JsonObject>();
+          out["id"] = String(entry.key().c_str()).toInt();
+          out["name"] = setup["Name"] | "";
+          out["class"] = setup["Class"] | "";
+        }
+      }
+    }
+
+    AsyncResponseStream *responseStream = request->beginResponseStream("application/json");
+    serializeJson(response, *responseStream);
+    request->send(responseStream);
+  });
+
+  // A newly created component must already be a fully valid catalog entry,
+  // so only the identity fields validation depends on (name, and either
+  // address or relayOpen/relayClose) are accepted here - everything else
+  // follows via /api/components/update. Requires a restart to take effect
+  // (see settings::AddComponent()).
+  Webserver->on("/api/components/add", HTTP_POST, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    String className, name, addressText, relayOpenText, relayCloseText;
+    for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
+      const AsyncWebParameter *p = request->getParam(i);
+      if(p->name() == "class") className = p->value();
+      else if(p->name() == "name") name = p->value();
+      else if(p->name() == "address") addressText = p->value();
+      else if(p->name() == "relayOpen") relayOpenText = p->value();
+      else if(p->name() == "relayClose") relayCloseText = p->value();
+    }
+
+    int16_t newID = 0;
+    String error;
+    bool ok;
+    if(className == "Blinds") {
+      if(relayOpenText.length() == 0 || relayCloseText.length() == 0) {
+        request->send(400, "application/json", "{\"error\":\"relayOpen and relayClose are required\"}");
+        return;
+      }
+      ok = Settings.AddComponent(className, name, -1, (int16_t)relayOpenText.toInt(), (int16_t)relayCloseText.toInt(), newID, error);
+    } else {
+      if(addressText.length() == 0) {
+        request->send(400, "application/json", "{\"error\":\"address is required\"}");
+        return;
+      }
+      ok = Settings.AddComponent(className, name, addressText.toInt(), 0, 0, newID, error);
+    }
+
+    Logger.Write("Web POST " + request->url() + " - component add " + String(ok ? "accepted (#" + String(newID) + ")" : "rejected (" + error + ")") + " by " + session->Username);
+    if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
+    request->send(200, "application/json", "{\"success\":true,\"id\":" + String(newID) + "}");
+  });
+
+  // Every submitted param except "id" is forwarded as-is into
+  // settings::UpdateComponent()'s Fields object; it only recognizes the
+  // field names relevant to the component's own class and ignores the
+  // rest. Requires a restart to take effect.
+  Webserver->on("/api/components/update", HTTP_POST, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    String idText;
+    JsonDocument fieldsDoc;
+    JsonObject fields = fieldsDoc.to<JsonObject>();
+    for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
+      const AsyncWebParameter *p = request->getParam(i);
+      if(p->name() == "id") idText = p->value();
+      else fields[p->name()] = p->value();
+    }
+
+    if(idText.length() == 0) { request->send(400, "application/json", "{\"error\":\"missing id\"}"); return; }
+    int16_t id = (int16_t)idText.toInt();
+
+    String error;
+    bool ok = Settings.UpdateComponent(id, fields, error);
+    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + " update " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+
+    if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
+    request->send(200, "application/json", "{\"success\":true,\"restart\":true}");
+  });
+
+  // Removes the config.json entry only - the running component isn't torn
+  // down live, so this requires a restart to actually take effect. Refused
+  // while the component is still a Blinds group's member (see
+  // settings::RemoveComponent()).
+  Webserver->on("/api/components/remove", HTTP_POST, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    String idText;
+    for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
+      const AsyncWebParameter *p = request->getParam(i);
+      if(p->name() == "id") idText = p->value();
+    }
+    if(idText.length() == 0) { request->send(400, "application/json", "{\"error\":\"missing id\"}"); return; }
+    int16_t id = (int16_t)idText.toInt();
+
+    String error;
+    bool ok = Settings.RemoveComponent(id, error);
+    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + " remove " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+
+    if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
+    request->send(200, "application/json", "{\"success\":true,\"restart\":true}");
+  });
+
+  // Every configured component (Relay/Button/Thermometer/Blinds) - backs
+  // both the Dashboard (every logged-in user, matching the original
+  // DeviceIQ's own /api/components) and setup.html's Components panel
+  // (admin-only, with a handful of safe properties editable in place via
+  // the POST below). Adding, removing or rewiring components is done via
+  // the /api/components/add|update|remove endpoints above, or by importing
+  // an updated config.json - either way requires a restart.
+  Webserver->on("/api/components", HTTP_GET, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
 
     JsonDocument doc;
     JsonArray items = doc["components"].to<JsonArray>();
@@ -1041,9 +1197,39 @@ void setup() {
     Logger.Write("Web GET " + request->url() + " - Config exported (" + session->Username + ")");
   });
 
+  // Registered before "/api/config/import" below: ESPAsyncWebServer's
+  // default URI matching treats "/api/config/import" as matching both an
+  // exact request and any path starting with "/api/config/import/" (its
+  // "backward compatible" matcher), and handlers are tried in registration
+  // order - registered after, "/api/config/import/apply" would never be
+  // reached, every request to it swallowed by "/api/config/import" first
+  // (same hazard the /api/components/* and /api/log/* routes are ordered
+  // to avoid).
+  Webserver->on("/api/config/import/apply", HTTP_POST, [](AsyncWebServerRequest *request){
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    if(!LittleFS.exists(CONFIG_IMPORT_FILE_NAME)) {
+      request->send(400, "application/json", "{\"error\":\"No validated import to apply.\"}");
+      return;
+    }
+
+    LittleFS.remove(CONFIG_FILE_NAME);
+    LittleFS.rename(CONFIG_IMPORT_FILE_NAME, CONFIG_FILE_NAME);
+
+    // The imported catalog becomes the seed of truth again - stale runtime
+    // state (keyed by component ID) from before the import could otherwise
+    // silently override it on the next boot.
+    LittleFS.remove(STATE_FILE_NAME);
+
+    request->send(200, "application/json", "{\"ok\":true}");
+    Logger.Write("Web POST " + request->url() + " - Config imported (" + session->Username + ")");
+    RestartDevice();
+  });
+
   // Two-step, like DeviceIQ: /import stages and validates the uploaded file
-  // without touching the live configuration; /import/apply commits the
-  // already-validated staging file and restarts. Nothing is overwritten
+  // without touching the live configuration; /import/apply (above) commits
+  // the already-validated staging file and restarts. Nothing is overwritten
   // just from an upload the admin hasn't confirmed yet.
   Webserver->on("/api/config/import", HTTP_POST,
     [](AsyncWebServerRequest *request){
@@ -1076,28 +1262,6 @@ void setup() {
       if(final && request->_tempFile) request->_tempFile.close();
     }
   );
-
-  Webserver->on("/api/config/import/apply", HTTP_POST, [](AsyncWebServerRequest *request){
-    WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
-
-    if(!LittleFS.exists(CONFIG_IMPORT_FILE_NAME)) {
-      request->send(400, "application/json", "{\"error\":\"No validated import to apply.\"}");
-      return;
-    }
-
-    LittleFS.remove(CONFIG_FILE_NAME);
-    LittleFS.rename(CONFIG_IMPORT_FILE_NAME, CONFIG_FILE_NAME);
-
-    // The imported catalog becomes the seed of truth again - stale runtime
-    // state (keyed by component ID) from before the import could otherwise
-    // silently override it on the next boot.
-    LittleFS.remove(STATE_FILE_NAME);
-
-    request->send(200, "application/json", "{\"ok\":true}");
-    Logger.Write("Web POST " + request->url() + " - Config imported (" + session->Username + ")");
-    RestartDevice();
-  });
 
   Webserver->begin();
 

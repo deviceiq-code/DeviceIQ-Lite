@@ -42,7 +42,7 @@
         <header class="app-header">
             <div class="app-header-title">
                 <h1>Dashboard</h1>
-                <p>Live blind status and controls</p>
+                <p>Live component status and controls</p>
             </div>
             <div class="app-header-actions">
                 <span class="hostname-chip" id="topbar-hostname"></span>
@@ -55,6 +55,10 @@
 
         <main>
             <div class="dashboard-toolbar">
+                <div class="view-toggle" id="view-toggle">
+                    <button type="button" class="view-toggle-btn" data-view="grid">Grid</button>
+                    <button type="button" class="view-toggle-btn" data-view="grouped">By Type</button>
+                </div>
                 <label class="refresh-select">
                     Refresh
                     <select id="refresh-interval-select">
@@ -66,6 +70,9 @@
                 </label>
             </div>
             <div id="components"></div>
+            <button class="fab" id="add-component-button" title="Add component" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            </button>
         </main>
     </div>
 </div>
@@ -75,8 +82,12 @@
 (function () {
     const DEFAULT_REFRESH_INTERVAL_MS = 1000;
     const VALID_REFRESH_INTERVALS_MS = [500, 1000, 3000, 5000];
+    const VIEW_COOKIE_NAME = "dashboardView";
     const REFRESH_COOKIE_NAME = "dashboardRefreshMs";
+    const CLASS_ORDER = ["Relay", "Button", "Blinds", "Thermometer"];
+    let isAdmin = false;
     let refreshTimer = null;
+    let lastComponents = [];
 
     function getCookie(name) {
         const match = document.cookie.match(new RegExp("(?:^|; )" + name + "=([^;]*)"));
@@ -89,22 +100,42 @@
         document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; max-age=31536000; samesite=lax";
     }
 
+    let viewMode = getCookie(VIEW_COOKIE_NAME) === "grouped" ? "grouped" : "grid";
+
     const storedRefreshMs = parseInt(getCookie(REFRESH_COOKIE_NAME), 10);
     let refreshIntervalMs = VALID_REFRESH_INTERVALS_MS.indexOf(storedRefreshMs) >= 0 ? storedRefreshMs : DEFAULT_REFRESH_INTERVAL_MS;
 
-    // Same viewBox/stroke conventions, and the same Blinds glyph, as
-    // DeviceIQ's own component icon set.
-    const BLINDS_ICON = '<rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>';
+    // Same viewBox/stroke conventions as the sidebar icons, and the same
+    // glyphs the original DeviceIQ dashboard uses for these classes.
+    const COMPONENT_ICONS = {
+        Relay: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+        Button: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/>',
+        Blinds: '<rect x="3" y="3" width="18" height="18" rx="1"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>',
+        Thermometer: '<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z"/>'
+    };
+    const DEFAULT_ICON = '<circle cx="12" cy="12" r="9"/>';
+    const GEAR_ICON = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>';
+    const TRASH_ICON = '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>';
 
     function svg(inner) {
         return '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
     }
 
-    function componentIcon() {
+    function componentIcon(className) {
         const wrap = document.createElement("div");
         wrap.className = "comp-icon";
-        wrap.innerHTML = svg(BLINDS_ICON);
+        wrap.innerHTML = svg(COMPONENT_ICONS[className] || DEFAULT_ICON);
         return wrap;
+    }
+
+    function iconButton(inner, extraClass, title, onClick) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "comp-icon-button" + (extraClass ? " " + extraClass : "");
+        button.title = title;
+        button.innerHTML = svg(inner);
+        if (onClick) button.addEventListener("click", onClick);
+        return button;
     }
 
     function controlButton(label, onClick) {
@@ -122,10 +153,47 @@
         return el;
     }
 
-    // Mirrors DeviceIQ's own blindsBody(): a state+position pill, a
-    // progress bar, and Open/Stop/Close controls. Unlike DeviceIQ's
-    // component cards, these controls aren't admin-only - operating the
-    // blinds is this device's everyday function, not device configuration.
+    function bigToggle(checked, onChange) {
+        const label = document.createElement("label");
+        label.className = "toggle toggle-lg";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = checked;
+        input.addEventListener("change", function () { onChange(input.checked); });
+        const track = document.createElement("span");
+        track.className = "track";
+        label.appendChild(input);
+        label.appendChild(track);
+        return label;
+    }
+
+    // Relay is admin-only to operate, same as the original DeviceIQ - only
+    // Blinds is exempt (see blindsBody below), since operating the blinds
+    // is this device's everyday function, not device configuration.
+    function relayBody(item) {
+        const wrap = document.createElement("div");
+        wrap.className = "comp-row";
+        wrap.appendChild(pill(item.state ? "On" : "Off", item.state ? "on" : "off"));
+
+        if (isAdmin) {
+            wrap.appendChild(bigToggle(!!item.state, function (checked) {
+                setProperty(item.id, "State", checked ? "true" : "false");
+            }));
+        }
+        return wrap;
+    }
+
+    // Button has nothing to set - same as the original, it's a state
+    // display only, for every logged-in user.
+    function buttonBody(item) {
+        const wrap = document.createElement("div");
+        wrap.className = "comp-row";
+        wrap.appendChild(pill(item.pressed ? "Pressed" : "Released", item.pressed ? "on" : "off"));
+        return wrap;
+    }
+
+    // Not admin-gated - operating the blinds is this device's everyday
+    // function, not device configuration (existing Lite behavior).
     function blindsBody(item) {
         const wrap = document.createElement("div");
         wrap.className = "comp-stack";
@@ -146,21 +214,70 @@
 
         const controls = document.createElement("div");
         controls.className = "comp-controls";
-        controls.appendChild(controlButton("Open", function () { setState(item.id, "open"); }));
-        controls.appendChild(controlButton("Stop", function () { setState(item.id, "stop"); }));
-        controls.appendChild(controlButton("Close", function () { setState(item.id, "close"); }));
+        controls.appendChild(controlButton("Open", function () { setProperty(item.id, "State", "open"); }));
+        controls.appendChild(controlButton("Stop", function () { setProperty(item.id, "State", "stop"); }));
+        controls.appendChild(controlButton("Close", function () { setProperty(item.id, "State", "close"); }));
         wrap.appendChild(controls);
 
         return wrap;
     }
 
+    function thermometerBody(item) {
+        const wrap = document.createElement("div");
+        wrap.className = "comp-row";
+
+        if (!item.available) {
+            wrap.appendChild(pill("Unavailable", "warn"));
+        } else {
+            let text = item.temperature.toFixed(1) + "°C";
+            if (item.humidity !== undefined) text += " · " + item.humidity.toFixed(1) + "%";
+            const state = document.createElement("span");
+            state.className = "state";
+            state.textContent = text;
+            wrap.appendChild(state);
+        }
+        return wrap;
+    }
+
+    function removeComponent(item) {
+        Notifications.confirm(
+            "Remove '" + item.name + "'? This deletes it from the configuration and requires a restart to take effect.",
+            { confirmLabel: "Remove" }
+        ).then(function (confirmed) {
+            if (!confirmed) return;
+
+            const body = new URLSearchParams();
+            body.set("id", item.id);
+
+            fetch("/api/components/remove", { method: "POST", body: body })
+                .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+                .then(function (result) {
+                    if (!result.ok) {
+                        Notifications.show(result.data.error || "Unable to remove the component.", { title: "Components" });
+                        return;
+                    }
+                    refresh();
+                    Notifications.confirm(
+                        "Component removed from configuration. Restart now to apply?",
+                        { confirmLabel: "Restart" }
+                    ).then(function (confirmRestart) {
+                        if (!confirmRestart) return;
+                        Notifications.reboot();
+                    });
+                })
+                .catch(function () {
+                    Notifications.show("Unable to reach the device.", { title: "Components" });
+                });
+        });
+    }
+
     function renderCard(item) {
         const card = document.createElement("div");
-        card.className = "comp-card";
+        card.className = "comp-card" + (item.enabled ? "" : " comp-disabled");
 
         const header = document.createElement("div");
         header.className = "comp-header";
-        header.appendChild(componentIcon());
+        header.appendChild(componentIcon(item.class));
 
         const title = document.createElement("div");
         title.className = "comp-title";
@@ -169,36 +286,106 @@
         name.textContent = item.name;
         const cls = document.createElement("div");
         cls.className = "comp-class";
-        cls.textContent = "Blinds";
+        cls.textContent = item.class + " · #" + item.id;
         title.appendChild(name);
         title.appendChild(cls);
         header.appendChild(title);
+
+        if (isAdmin) {
+            const actions = document.createElement("div");
+            actions.className = "comp-actions";
+            actions.appendChild(iconButton(GEAR_ICON, "", "Configure", function () {
+                window.location.href = "/component.html?id=" + item.id;
+            }));
+            actions.appendChild(iconButton(TRASH_ICON, "danger", "Remove", function () { removeComponent(item); }));
+            header.appendChild(actions);
+        }
+
         card.appendChild(header);
 
         const body = document.createElement("div");
         body.className = "comp-body";
-        body.appendChild(blindsBody(item));
+
+        let content;
+        if (item.class === "Relay") content = relayBody(item);
+        else if (item.class === "Button") content = buttonBody(item);
+        else if (item.class === "Blinds") content = blindsBody(item);
+        else if (item.class === "Thermometer") content = thermometerBody(item);
+        else {
+            content = document.createElement("div");
+            content.className = "comp-row";
+            content.innerHTML = '<span class="state">No status available</span>';
+        }
+        body.appendChild(content);
         card.appendChild(body);
 
         return card;
     }
 
-    function render(data) {
+    function buildGrid(items) {
+        const grid = document.createElement("div");
+        grid.className = "comp-grid";
+        items.forEach(function (item) { grid.appendChild(renderCard(item)); });
+        return grid;
+    }
+
+    function render(components) {
+        lastComponents = components;
         const container = document.getElementById("components");
         container.innerHTML = "";
 
-        const grid = document.createElement("div");
-        grid.className = "comp-grid";
-        (data.blinds || []).forEach(function (item) { grid.appendChild(renderCard(item)); });
-        container.appendChild(grid);
+        if (components.length === 0) {
+            container.innerHTML = '<div class="placeholder"><div class="title">No components</div><p>No components are currently configured.</p></div>';
+            return;
+        }
+
+        if (viewMode !== "grouped") {
+            container.appendChild(buildGrid(components));
+            return;
+        }
+
+        const classes = CLASS_ORDER.filter(function (className) {
+            return components.some(function (item) { return item.class === className; });
+        });
+        // Any class not in CLASS_ORDER still gets a group, just after the known ones.
+        components.forEach(function (item) {
+            if (classes.indexOf(item.class) < 0) classes.push(item.class);
+        });
+
+        classes.forEach(function (className) {
+            const items = components.filter(function (item) { return item.class === className; });
+            const group = document.createElement("div");
+            group.className = "comp-group";
+            const title = document.createElement("div");
+            title.className = "group-title";
+            title.textContent = className;
+            group.appendChild(title);
+            group.appendChild(buildGrid(items));
+            container.appendChild(group);
+        });
     }
 
-    function setState(id, state) {
-        fetch("/api/blinds?id=" + id + "&state=" + state).finally(refresh);
+    function setViewMode(mode) {
+        viewMode = mode;
+        setCookie(VIEW_COOKIE_NAME, mode);
+        document.querySelectorAll(".view-toggle-btn").forEach(function (button) {
+            button.classList.toggle("active", button.dataset.view === mode);
+        });
+        render(lastComponents);
+    }
+
+    function setProperty(id, property, value) {
+        const body = new URLSearchParams();
+        body.set("id", id);
+        body.set("property", property);
+        body.set("value", value);
+        fetch("/api/components", { method: "POST", body: body }).finally(refresh);
     }
 
     function refresh() {
-        fetch("/api/blinds").then(function (response) { return response.json(); }).then(render).catch(function () {});
+        fetch("/api/components").then(function (response) { return response.json(); }).then(function (data) {
+            render(data.components || []);
+        }).catch(function () {});
     }
 
     function startRefreshTimer() {
@@ -223,10 +410,17 @@
         } else if (!data.logFileEnabled) {
             document.getElementById("log-link").remove();
         }
+        isAdmin = data.admin;
+        if (isAdmin) document.getElementById("add-component-button").hidden = false;
 
         refresh();
         startRefreshTimer();
     }).catch(function () { window.location.replace("/"); });
+
+    document.querySelectorAll(".view-toggle-btn").forEach(function (button) {
+        button.classList.toggle("active", button.dataset.view === viewMode);
+        button.addEventListener("click", function () { setViewMode(button.dataset.view); });
+    });
 
     const refreshSelect = document.getElementById("refresh-interval-select");
     refreshSelect.value = String(refreshIntervalMs);
@@ -234,6 +428,10 @@
         refreshIntervalMs = parseInt(refreshSelect.value, 10);
         setCookie(REFRESH_COOKIE_NAME, String(refreshIntervalMs));
         startRefreshTimer();
+    });
+
+    document.getElementById("add-component-button").addEventListener("click", function () {
+        window.location.href = "/component.html";
     });
 
     document.getElementById("logout-button").addEventListener("click", function () {

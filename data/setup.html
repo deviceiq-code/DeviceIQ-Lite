@@ -649,8 +649,9 @@
     // component installed from config.json's Components object, with a
     // handful of safe properties (Enabled, and Blinds' Step Time/button
     // enables/Invert Buttons) editable in place. Adding, removing, or
-    // rewiring components is still done via config.json import, on the
-    // Configuration tab.
+    // rewiring components is done from the Dashboard (the "+" button and
+    // each card's gear/trash icons), or by importing a whole config.json
+    // on the Configuration tab.
     function renderComponentsPanel(components) {
         const panel = document.createElement("div");
         panel.className = "tab-panel";
@@ -664,7 +665,7 @@
         const title = document.createElement("h2");
         title.textContent = "Components";
         const desc = document.createElement("p");
-        desc.textContent = "Every component installed from config.json. Changes here apply immediately. Adding, removing, or rewiring components is done by importing an updated configuration file on the Configuration tab.";
+        desc.textContent = "Every component installed from config.json. Changes here apply immediately. Adding, removing, or rewiring components is done from the Dashboard, or by importing an updated configuration file on the Configuration tab.";
         header.appendChild(title);
         header.appendChild(desc);
         card.appendChild(header);
