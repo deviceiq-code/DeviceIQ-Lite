@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
 
-// Minimal standalone HTTP server dedicated to triggering blind commands
+// Minimal standalone HTTP server dedicated to triggering component commands
 // from external automation systems (Home Assistant, Node-RED, shortcuts,
 // scripts) via a shared token instead of a login session. Runs on its own
 // port, entirely independent of Webserver (the browser-facing admin UI) -

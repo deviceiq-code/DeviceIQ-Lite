@@ -199,24 +199,24 @@
         },
         {
             id: "MQTT", title: "MQTT",
-            desc: "Publish blind state to an MQTT broker, with optional Home Assistant discovery.",
+            desc: "Publish component state to an MQTT broker, with optional Home Assistant discovery.",
             note: "Changes require a restart.",
             fields: [
-                { key: "Enabled", label: "Enabled", desc: "Publish blind state to an MQTT broker.", type: "bool" },
+                { key: "Enabled", label: "Enabled", desc: "Publish component state to an MQTT broker.", type: "bool" },
                 { key: "Broker", label: "Broker", desc: "MQTT broker hostname or address.", type: "text" },
                 { key: "Port", label: "Port", desc: "MQTT broker port.", type: "number", min: 1, max: 65535 },
                 { key: "User", label: "User", desc: "MQTT username. Leave empty for anonymous access.", type: "text" },
                 { key: "Password", label: "Password", desc: "MQTT password.", type: "text" },
-                { key: "Discovery Enabled", label: "Discovery Enabled", desc: "Publish Home Assistant MQTT discovery messages for every blind.", type: "bool" },
+                { key: "Discovery Enabled", label: "Discovery Enabled", desc: "Publish Home Assistant MQTT discovery messages for every component.", type: "bool" },
                 { key: "Discovery Prefix", label: "Discovery Prefix", desc: "Topic prefix Home Assistant listens on for discovery.", type: "text" }
             ]
         },
         {
             id: "Webhooks", title: "Webhooks",
-            desc: "Trigger blind commands remotely via a shared token, without signing in.",
+            desc: "Trigger component commands remotely via a shared token, without signing in.",
             note: "Changes require a restart.",
             fields: [
-                { key: "Enabled", label: "Enabled", desc: "Accept remote blind commands authenticated by token.", type: "bool" },
+                { key: "Enabled", label: "Enabled", desc: "Accept remote component commands authenticated by token.", type: "bool" },
                 { key: "Token", label: "Token", desc: "Shared secret required on every request.", type: "text" },
                 { key: "Port", label: "Port", desc: "TCP port the webhooks server listens on.", type: "number", min: 1, max: 65535 }
             ],

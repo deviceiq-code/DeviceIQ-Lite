@@ -10,10 +10,11 @@
 #include "components/Thermometer.h"
 #include "components/Blinds.h"
 
-// Same shape as DeviceIQ's mqttclient: connect, publish blind state,
-// publish Home Assistant MQTT discovery for each blind as a "cover", and
-// accept Set commands back. What's different is entirely about the
-// platform, not the protocol: DeviceIQ runs this from its own FreeRTOS
+// Same shape as DeviceIQ's mqttclient: connect, publish component state,
+// publish Home Assistant MQTT discovery per component (Relay as a "switch",
+// Button as a "binary_sensor", Thermometer as "sensor", Blinds as a
+// "cover"), and accept Set commands back. What's different is entirely about
+// the platform, not the protocol: DeviceIQ runs this from its own FreeRTOS
 // task with event queues; the ESP8266 here has neither, so Loop() is
 // called from the sketch's own loop() instead, and state changes are
 // noticed by comparing against the last-published value rather than
@@ -32,7 +33,7 @@ class mqttclient {
     private:
         // A blocking pClient.connect() takes up to this long when the
         // broker is unreachable, stalling the whole device meanwhile
-        // (blind control and the web server included) - there is no
+        // (component control and the web server included) - there is no
         // second core or task to keep them running underneath it. Kept
         // short, and only attempted once per RECONNECT_INTERVAL_MS, so an
         // unreachable broker costs a couple of seconds occasionally rather

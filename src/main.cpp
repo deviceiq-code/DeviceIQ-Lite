@@ -81,7 +81,7 @@ WebSession* AuthenticatedSession(AsyncWebServerRequest *request) {
 
 // Reuses the oldest slot once all MAX_SESSIONS are taken, rather than
 // rejecting the login - a handful of concurrent browser sessions is already
-// generous for a single-blind device with one or two admins.
+// generous for a small device with one or two admins.
 WebSession* CreateSession(const String& username, bool admin) {
   int freeIndex = 0;
   for(uint8_t i = 0; i < MAX_SESSIONS; i++) {

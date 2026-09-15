@@ -199,7 +199,8 @@ class settings {
         // Applies a property change to a live component (Enabled for any
         // class; StepTimeMs/ButtonOpenEnabled/ButtonCloseEnabled/
         // InvertButtons for Blinds) and persists it into config.json so it
-        // survives a reboot. Backs POST /api/components. Implemented in
+        // survives a reboot. Backs POST /api/components, Webhooks'
+        // /component/set, and MQTT's "Set" command topic. Implemented in
         // ComponentConfig.cpp.
         bool SetComponentProperty(int16_t ID, const String& Property, const String& Value, String& Error);
 

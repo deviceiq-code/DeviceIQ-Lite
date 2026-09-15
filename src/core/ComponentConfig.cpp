@@ -636,9 +636,10 @@ bool settings::SetComponentProperty(int16_t ID, const String& Property, const St
 
     // Live-only: reflected in state.json via the normal periodic save
     // (ComponentManager::PersistenceRequired()) rather than written back
-    // into config.json here - same split Blinds.Position already used via
-    // /api/blinds, now shared by the Dashboard's Relay toggle and Blinds
-    // Open/Stop/Close controls (both now go through this single endpoint).
+    // into config.json here. Single property setter shared by the Dashboard
+    // ("/api/components" POST), Webhooks ("/component/set"), and MQTT (a
+    // "Set" command topic) - a Relay/Blinds command means the same thing
+    // regardless of which of the three sent it.
     if(target->Class() == component::Classes::Relay && Property.equalsIgnoreCase("State")) {
         bool boolValue = false;
         if(!ParseConfigBool(Value, boolValue)) { Error = "invalid value"; return false; }

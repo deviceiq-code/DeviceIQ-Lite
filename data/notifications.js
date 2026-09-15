@@ -1,8 +1,7 @@
 // Shared by every authenticated page. The toast/confirm primitives and the
 // idle-session watchdog are used everywhere; unlike DeviceIQ's version,
-// there is no component-change poller here - Lite has no generic
-// components API to poll, and its one stateful page (the dashboard) shows
-// blind status inline already.
+// there is no component-change poller here - the dashboard already polls
+// /api/components and shows every component's status inline itself.
 (function () {
     const TOAST_DURATION_MS = 5000;
 
