@@ -285,7 +285,7 @@ void settings::FactoryReset() {
     Users.Add(Defaults.Users.Admin.Username, Defaults.Users.Admin.Password, true);
     AddDefaultUserAccount();
     Save();
-    EnsureDefaultComponents(CONFIG_FILE_NAME, LegacyBlindsSeed(), true);
+    ClearComponents(CONFIG_FILE_NAME);
 
     // Stale runtime state (keyed by component ID) from before the reset
     // could otherwise silently override the fresh defaults on next boot.

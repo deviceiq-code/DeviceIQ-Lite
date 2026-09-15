@@ -25,7 +25,7 @@ struct defaults {
         const uint16_t ReconnectMaximumInterval = 60;
         const bool FallbackAPEnabled = true;
         const char* FallbackAPSSID = ""; // Empty uses the device hostname.
-        const char* FallbackAPPassword = "NoConnection#123!";
+        const char* FallbackAPPassword = "DeviceIQ-Setup";
         const uint16_t FallbackAPRetention = 300;
         const uint16_t HTTPPort = 80;
     } Network;
@@ -64,7 +64,7 @@ struct defaults {
         // re-sync - so there's no live drift to correct later.
         const bool NTPEnabled = true;
         const char* NTPServer = "pool.ntp.org";
-        const int8_t TimeZone = 0; // UTC offset in hours.
+        const int8_t TimeZone = -3; // UTC offset in hours.
     } General;
     struct mqtt {
         const bool Enabled = false;

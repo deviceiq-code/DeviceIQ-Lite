@@ -591,7 +591,7 @@ bool settings::SaveComponentsState(const String& StateFileName) {
     return ok;
 }
 
-bool settings::EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed, bool Force) {
+bool settings::ClearComponents(const String& ConfigFileName) {
     JsonDocument doc;
     if(LittleFS.exists(ConfigFileName)) {
         File file = LittleFS.open(ConfigFileName, "r");
@@ -601,7 +601,27 @@ bool settings::EnsureDefaultComponents(const String& ConfigFileName, const Legac
         }
     }
 
-    bool alreadyValid = !Force && (doc["ComponentSchemaVersion"] | 0) == ComponentSchemaVersion && doc["Components"].is<JsonObjectConst>();
+    doc["ComponentSchemaVersion"] = ComponentSchemaVersion;
+    doc["Components"].to<JsonObject>();
+
+    File file = LittleFS.open(ConfigFileName, "w");
+    if(!file) return false;
+    bool ok = serializeJsonPretty(doc, file) > 0;
+    file.close();
+    return ok;
+}
+
+bool settings::EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed) {
+    JsonDocument doc;
+    if(LittleFS.exists(ConfigFileName)) {
+        File file = LittleFS.open(ConfigFileName, "r");
+        if(file) {
+            deserializeJson(doc, file);
+            file.close();
+        }
+    }
+
+    bool alreadyValid = (doc["ComponentSchemaVersion"] | 0) == ComponentSchemaVersion && doc["Components"].is<JsonObjectConst>();
     if(alreadyValid) return true;
 
     doc["ComponentSchemaVersion"] = ComponentSchemaVersion;

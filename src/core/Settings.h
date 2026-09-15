@@ -49,9 +49,14 @@ class settings {
         // Writes the default Components object (matching Lite's fixed PCB
         // wiring - two Blinds, pins as in main.cpp's old hardcoded
         // constructions) into ConfigFileName, unless a valid Components
-        // object is already present (or Force is true, used by
-        // FactoryReset()). Implemented in ComponentConfig.cpp.
-        bool EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed, bool Force = false);
+        // object is already present. Implemented in ComponentConfig.cpp.
+        bool EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed);
+
+        // Wipes the Components object down to empty (keeping
+        // ComponentSchemaVersion current) - used by FactoryReset(), which
+        // unlike a fresh boot must not repopulate Lite's fixed-wiring
+        // defaults. Implemented in ComponentConfig.cpp.
+        bool ClearComponents(const String& ConfigFileName);
 
         void LoadDefaults();
         // Adds DeviceIQ's second default account (non-admin "user"). Called

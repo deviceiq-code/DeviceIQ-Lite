@@ -104,6 +104,12 @@ void RestartDevice() {
   GeneralTimer->OnTimeout([] { ESP.restart(); });
 }
 
+// DeviceIQ's own "Web Server: ..." log lines always identify the caller as
+// username@remoteIP - matched here so Lite's log reads the same way.
+String ClientIP(AsyncWebServerRequest *request) {
+  return request->client() ? request->client()->remoteIP().toString() : String("?");
+}
+
 // Only index.html and restarting.html still use server-side templating -
 // every other page (dashboard/setup/about) is a static file that fetches
 // its own data from /api/*, like DeviceIQ's.
@@ -235,7 +241,6 @@ void setup() {
 
   Webserver->onNotFound([](AsyncWebServerRequest *request) {
     request->send(404, "text/plain", "404: Not found");
-    Logger.Write("Web GET " + request->url() + " - Not Found");
   });
 
   Webserver->on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -251,12 +256,10 @@ void setup() {
   // own, via /api/session, whether to skip straight to the dashboard.
   Webserver->on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/index.html", String(), false, cgi);
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/index.html", String(), false, cgi);
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/restarting.html", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -287,7 +290,7 @@ void setup() {
     WebSession *session = AuthenticatedSession(request);
     if(session) session->InUse = false;
 
-    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"ok\":true}");
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"success\":true}");
     response->addHeader("Set-Cookie", "session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
     request->send(response);
   });
@@ -366,7 +369,7 @@ void setup() {
     }
 
     if(!Settings.Users.Authenticate(username, password)) {
-      Logger.Write("Web POST " + request->url() + " - Invalid credentials", logger::Warning);
+      Logger.Write("Web Server: Logon failed for " + username + "@" + ClientIP(request) + " - invalid credentials", logger::Warning);
       request->send(401, "application/json", "{\"error\":\"Invalid username or password.\"}");
       return;
     }
@@ -381,7 +384,7 @@ void setup() {
     response->addHeader("Set-Cookie", "session=" + session->Token + "; Path=/; HttpOnly; SameSite=Strict");
     request->send(response);
 
-    Logger.Write("Web POST " + request->url() + " - Login (" + info.Username + ")");
+    Logger.Write("Web Server: Logon successful for " + info.Username + "@" + ClientIP(request));
   });
 
   // Every page below is a static file that gates itself client-side via
@@ -389,32 +392,26 @@ void setup() {
   // check anymore, now that logging in is always required.
   Webserver->on("/dashboard.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/dashboard.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/component.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/component.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/setup.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/setup.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/about.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/about.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/users.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/users.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   Webserver->on("/log.html", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send(LittleFS, "/log.html", "text/html");
-    Logger.Write("Web GET " + request->url());
   });
 
   // Registered before the plain "/api/log" GET below: ESPAsyncWebServer's
@@ -426,19 +423,21 @@ void setup() {
   // /api/components/* routes above are ordered to avoid).
   Webserver->on("/api/log/export", HTTP_GET, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     AsyncWebServerResponse *response = LittleFS.exists(LOG_FILE_NAME)
       ? request->beginResponse(LittleFS, LOG_FILE_NAME, "text/plain")
       : request->beginResponse(200, "text/plain", "");
     response->addHeader("Content-Disposition", "attachment; filename=\"device.log\"");
     request->send(response);
-    Logger.Write("Web GET " + request->url() + " - Log exported (" + session->Username + ")");
+    Logger.Write("Web Server: log exported by " + session->Username + "@" + ClientIP(request));
   });
 
   Webserver->on("/api/log", HTTP_GET, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String content;
     if(LittleFS.exists(LOG_FILE_NAME)) {
@@ -475,20 +474,21 @@ void setup() {
 
   Webserver->on("/api/log/clear", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     bool success = !LittleFS.exists(LOG_FILE_NAME) || LittleFS.remove(LOG_FILE_NAME);
 
     if(!success) {
       request->send(500, "application/json", "{\"error\":\"Unable to clear the log file.\"}");
-      Logger.Write("Web POST " + request->url() + " - Log clear rejected (" + session->Username + ")", logger::Warning);
+      Logger.Write("Web Server: log clear rejected for " + session->Username + "@" + ClientIP(request), logger::Warning);
       return;
     }
 
     request->send(200, "application/json", "{\"success\":true}");
     // Logged after clearing: if File is one of the active log endpoints,
     // this becomes the first entry of the fresh log.
-    Logger.Write("Web POST " + request->url() + " - Log clear accepted (" + session->Username + ")");
+    Logger.Write("Web Server: log clear accepted for " + session->Username + "@" + ClientIP(request));
   });
 
   // Array-based and ID-addressed, unlike the old fixed left/right fields -
@@ -521,7 +521,6 @@ void setup() {
       AsyncResponseStream *response = request->beginResponseStream("application/json");
       serializeJson(doc, *response);
       request->send(response);
-      Logger.Write("Web GET " + request->url());
       return;
     }
 
@@ -539,13 +538,13 @@ void setup() {
       else if(value == "close") target.Close();
       else if(value == "stop") target.Stop();
       else { request->send(422, "application/json", "{\"error\":\"invalid state\"}"); return; }
-      Logger.Write("Web SET " + request->url() + " - " + target.Name() + ".state=" + value);
+      Logger.Write("Web Server: component set accepted for " + session->Username + "@" + ClientIP(request) + ": " + target.Name() + ".state=" + value);
     } else if(request->hasParam("position")) {
       String value = request->getParam("position")->value();
       int position = value.toInt();
       if(position < 0 || position > blinds::MAX_POSITION) { request->send(422, "application/json", "{\"error\":\"invalid position\"}"); return; }
       target.SetPosition((uint8_t)position);
-      Logger.Write("Web SET " + request->url() + " - " + target.Name() + ".position=" + value);
+      Logger.Write("Web Server: component set accepted for " + session->Username + "@" + ClientIP(request) + ": " + target.Name() + ".position=" + value);
     }
 
     JsonDocument doc;
@@ -570,7 +569,8 @@ void setup() {
   // form.
   Webserver->on("/api/components/catalog", HTTP_GET, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     File file = LittleFS.open(CONFIG_FILE_NAME, "r");
     JsonDocument doc;
@@ -611,7 +611,8 @@ void setup() {
   // (see settings::AddComponent()).
   Webserver->on("/api/components/add", HTTP_POST, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String className, name, addressText, relayOpenText, relayCloseText;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -640,7 +641,7 @@ void setup() {
       ok = Settings.AddComponent(className, name, addressText.toInt(), 0, 0, newID, error);
     }
 
-    Logger.Write("Web POST " + request->url() + " - component add " + String(ok ? "accepted (#" + String(newID) + ")" : "rejected (" + error + ")") + " by " + session->Username);
+    Logger.Write("Web Server: component add " + String(ok ? "accepted" : "rejected") + " for " + session->Username + "@" + ClientIP(request) + ": " + className + (ok ? " (#" + String(newID) + ")" : ": " + error));
     if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
     request->send(200, "application/json", "{\"success\":true,\"id\":" + String(newID) + "}");
   });
@@ -651,7 +652,8 @@ void setup() {
   // rest. Requires a restart to take effect.
   Webserver->on("/api/components/update", HTTP_POST, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String idText;
     JsonDocument fieldsDoc;
@@ -667,7 +669,7 @@ void setup() {
 
     String error;
     bool ok = Settings.UpdateComponent(id, fields, error);
-    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + " update " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+    Logger.Write("Web Server: component update " + String(ok ? "accepted" : "rejected") + " for " + session->Username + "@" + ClientIP(request) + ": #" + String(id) + (ok ? "" : ": " + error));
 
     if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
     request->send(200, "application/json", "{\"success\":true,\"restart\":true}");
@@ -679,7 +681,8 @@ void setup() {
   // settings::RemoveComponent()).
   Webserver->on("/api/components/remove", HTTP_POST, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String idText;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -691,7 +694,7 @@ void setup() {
 
     String error;
     bool ok = Settings.RemoveComponent(id, error);
-    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + " remove " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+    Logger.Write("Web Server: component remove " + String(ok ? "accepted" : "rejected") + " for " + session->Username + "@" + ClientIP(request) + ": #" + String(id) + (ok ? "" : ": " + error));
 
     if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
     request->send(200, "application/json", "{\"success\":true,\"restart\":true}");
@@ -750,7 +753,8 @@ void setup() {
 
   Webserver->on("/api/components", HTTP_POST, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String idText, property, value;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -768,7 +772,7 @@ void setup() {
     int16_t id = (int16_t)idText.toInt();
     String error;
     bool ok = Settings.SetComponentProperty(id, property, value, error);
-    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + "." + property + "=" + value + " " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+    Logger.Write("Web Server: component set " + String(ok ? "accepted" : "rejected") + " for " + session->Username + "@" + ClientIP(request) + ": #" + String(id) + "." + property + "=" + value + (ok ? "" : ": " + error));
 
     if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
     request->send(200, "application/json", "{\"success\":true}");
@@ -785,7 +789,8 @@ void setup() {
   // failure, since there is no way to roll back a removed password hash.
   Webserver->on("/api/users", HTTP_GET, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     JsonDocument doc;
     JsonArray users = doc["users"].to<JsonArray>();
@@ -802,7 +807,8 @@ void setup() {
 
   Webserver->on("/api/users/add", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String Username, Password;
     bool Admin = false;
@@ -820,13 +826,14 @@ void setup() {
     }
 
     bool saved = Settings.Save();
-    Logger.Write("Web POST " + request->url() + " - User add " + String(saved ? "" : "(not saved) ") + "by " + session->Username + ": " + Username);
+    Logger.Write("Web Server: user add " + String(saved ? "accepted" : "accepted but not saved") + " by " + session->Username + "@" + ClientIP(request) + ": " + Username);
     request->send(200, "application/json", saved ? "{\"success\":true}" : "{\"success\":true,\"warning\":\"could not save to disk; this change will be lost on restart\"}");
   });
 
   Webserver->on("/api/users/remove", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String Username;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -841,13 +848,14 @@ void setup() {
     }
 
     bool saved = Settings.Save();
-    Logger.Write("Web POST " + request->url() + " - User remove " + String(saved ? "" : "(not saved) ") + "by " + session->Username + ": " + Username);
+    Logger.Write("Web Server: user remove " + String(saved ? "accepted" : "accepted but not saved") + " by " + session->Username + "@" + ClientIP(request) + ": " + Username);
     request->send(200, "application/json", saved ? "{\"success\":true}" : "{\"success\":true,\"warning\":\"could not save to disk; this change will be lost on restart\"}");
   });
 
   Webserver->on("/api/users/rename", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String Username, NewUsername;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -863,13 +871,14 @@ void setup() {
     }
 
     bool saved = Settings.Save();
-    Logger.Write("Web POST " + request->url() + " - User rename " + String(saved ? "" : "(not saved) ") + "by " + session->Username + ": " + Username + " -> " + NewUsername);
+    Logger.Write("Web Server: user rename " + String(saved ? "accepted" : "accepted but not saved") + " by " + session->Username + "@" + ClientIP(request) + ": " + Username + " -> " + NewUsername);
     request->send(200, "application/json", saved ? "{\"success\":true}" : "{\"success\":true,\"warning\":\"could not save to disk; this change will be lost on restart\"}");
   });
 
   Webserver->on("/api/users/set-admin", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String Username;
     bool Admin = false;
@@ -886,13 +895,14 @@ void setup() {
     }
 
     bool saved = Settings.Save();
-    Logger.Write("Web POST " + request->url() + " - User set-admin " + String(saved ? "" : "(not saved) ") + "by " + session->Username + ": " + Username + "=" + (Admin ? "true" : "false"));
+    Logger.Write("Web Server: user set-admin " + String(saved ? "accepted" : "accepted but not saved") + " by " + session->Username + "@" + ClientIP(request) + ": " + Username + "=" + (Admin ? "true" : "false"));
     request->send(200, "application/json", saved ? "{\"success\":true}" : "{\"success\":true,\"warning\":\"could not save to disk; this change will be lost on restart\"}");
   });
 
   Webserver->on("/api/users/set-password", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String Username, Password;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -908,13 +918,14 @@ void setup() {
     }
 
     bool saved = Settings.Save();
-    Logger.Write("Web POST " + request->url() + " - User set-password " + String(saved ? "" : "(not saved) ") + "by " + session->Username + ": " + Username);
+    Logger.Write("Web Server: user set-password " + String(saved ? "accepted" : "accepted but not saved") + " by " + session->Username + "@" + ClientIP(request) + ": " + Username);
     request->send(200, "application/json", saved ? "{\"success\":true}" : "{\"success\":true,\"warning\":\"could not save to disk; this change will be lost on restart\"}");
   });
 
   Webserver->on("/api/settings", HTTP_GET, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     JsonDocument doc;
 
@@ -973,7 +984,8 @@ void setup() {
 
   Webserver->on("/api/settings", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String section;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -1132,7 +1144,7 @@ void setup() {
     }
 
     request->send(200, "application/json", String("{\"restart\":") + (restart ? "true" : "false") + "}");
-    Logger.Write("Web POST " + request->url() + " - Settings changed (" + section + ") (" + session->Username + ")");
+    Logger.Write("Web Server: settings update accepted for " + session->Username + "@" + ClientIP(request) + ": " + section);
   });
 
   // Manual override for when NTP is off (or unreachable) - only meaningful
@@ -1140,7 +1152,8 @@ void setup() {
   // this endpoint.
   Webserver->on("/api/clock/set", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     String DateTime;
     for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
@@ -1164,37 +1177,40 @@ void setup() {
     struct timeval NewTime = { Epoch, 0 };
     settimeofday(&NewTime, nullptr);
 
-    request->send(200, "application/json", "{\"ok\":true}");
-    Logger.Write("Web POST " + request->url() + " - Clock set manually (" + session->Username + ")");
+    request->send(200, "application/json", "{\"success\":true}");
+    Logger.Write("Web Server: clock set manually by " + session->Username + "@" + ClientIP(request));
   });
 
   Webserver->on("/api/restart", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
-    request->send(200, "application/json", "{\"ok\":true}");
-    Logger.Write("Web POST " + request->url() + " - Restart (" + session->Username + ")");
+    request->send(200, "application/json", "{\"success\":true}");
+    Logger.Write("Web Server: reboot requested by " + session->Username + "@" + ClientIP(request));
     RestartDevice();
   });
 
   Webserver->on("/api/reset", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
-    request->send(200, "application/json", "{\"ok\":true}");
-    Logger.Write("Web POST " + request->url() + " - Reset to Factory Defaults (" + session->Username + ")");
+    request->send(200, "application/json", "{\"success\":true}");
+    Logger.Write("Web Server: configuration reset to factory defaults by " + session->Username + "@" + ClientIP(request) + "; restarting", logger::Warning);
     Settings.FactoryReset();
     RestartDevice();
   });
 
   Webserver->on("/api/config/export", HTTP_GET, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     AsyncWebServerResponse *response = request->beginResponse(LittleFS, CONFIG_FILE_NAME, "application/json");
     response->addHeader("Content-Disposition", "attachment; filename=\"config-" + Settings.Network_Hostname() + ".json\"");
     request->send(response);
-    Logger.Write("Web GET " + request->url() + " - Config exported (" + session->Username + ")");
+    Logger.Write("Web Server: configuration exported by " + session->Username + "@" + ClientIP(request));
   });
 
   // Registered before "/api/config/import" below: ESPAsyncWebServer's
@@ -1207,7 +1223,8 @@ void setup() {
   // to avoid).
   Webserver->on("/api/config/import/apply", HTTP_POST, [](AsyncWebServerRequest *request){
     WebSession *session = AuthenticatedSession(request);
-    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+    if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
     if(!LittleFS.exists(CONFIG_IMPORT_FILE_NAME)) {
       request->send(400, "application/json", "{\"error\":\"No validated import to apply.\"}");
@@ -1222,8 +1239,8 @@ void setup() {
     // silently override it on the next boot.
     LittleFS.remove(STATE_FILE_NAME);
 
-    request->send(200, "application/json", "{\"ok\":true}");
-    Logger.Write("Web POST " + request->url() + " - Config imported (" + session->Username + ")");
+    request->send(200, "application/json", "{\"success\":true}");
+    Logger.Write("Web Server: configuration imported by " + session->Username + "@" + ClientIP(request) + "; restarting");
     RestartDevice();
   });
 
@@ -1234,7 +1251,8 @@ void setup() {
   Webserver->on("/api/config/import", HTTP_POST,
     [](AsyncWebServerRequest *request){
       WebSession *session = AuthenticatedSession(request);
-      if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+      if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+      if(!session->Admin) { request->send(403, "application/json", "{\"error\":\"admin session required\"}"); return; }
 
       File file = LittleFS.open(CONFIG_IMPORT_FILE_NAME, "r");
       if(!file) { request->send(400, "application/json", "{\"error\":\"No file received.\"}"); return; }
@@ -1250,8 +1268,8 @@ void setup() {
         return;
       }
 
-      request->send(200, "application/json", "{\"ok\":true}");
-      Logger.Write("Web POST " + request->url() + " - Config validated (" + session->Username + ")");
+      request->send(200, "application/json", "{\"success\":true}");
+      Logger.Write("Web Server: configuration import staged by " + session->Username + "@" + ClientIP(request));
     },
     [](AsyncWebServerRequest *request, const String& filename, size_t index, uint8_t *data, size_t len, bool final){
       WebSession *session = AuthenticatedSession(request);
