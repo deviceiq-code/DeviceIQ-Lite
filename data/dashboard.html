@@ -122,7 +122,7 @@
     // progress bar, and Open/Stop/Close controls. Unlike DeviceIQ's
     // component cards, these controls aren't admin-only - operating the
     // blinds is this device's everyday function, not device configuration.
-    function blindsBody(item, side) {
+    function blindsBody(item) {
         const wrap = document.createElement("div");
         wrap.className = "comp-stack";
 
@@ -142,15 +142,15 @@
 
         const controls = document.createElement("div");
         controls.className = "comp-controls";
-        controls.appendChild(controlButton("Open", function () { setState(side, "open"); }));
-        controls.appendChild(controlButton("Stop", function () { setState(side, "stop"); }));
-        controls.appendChild(controlButton("Close", function () { setState(side, "close"); }));
+        controls.appendChild(controlButton("Open", function () { setState(item.id, "open"); }));
+        controls.appendChild(controlButton("Stop", function () { setState(item.id, "stop"); }));
+        controls.appendChild(controlButton("Close", function () { setState(item.id, "close"); }));
         wrap.appendChild(controls);
 
         return wrap;
     }
 
-    function renderCard(item, side) {
+    function renderCard(item) {
         const card = document.createElement("div");
         card.className = "comp-card";
 
@@ -165,7 +165,7 @@
         name.textContent = item.name;
         const cls = document.createElement("div");
         cls.className = "comp-class";
-        cls.textContent = "Blinds · " + (side === "left" ? "Left" : "Right");
+        cls.textContent = "Blinds";
         title.appendChild(name);
         title.appendChild(cls);
         header.appendChild(title);
@@ -173,7 +173,7 @@
 
         const body = document.createElement("div");
         body.className = "comp-body";
-        body.appendChild(blindsBody(item, side));
+        body.appendChild(blindsBody(item));
         card.appendChild(body);
 
         return card;
@@ -185,14 +185,12 @@
 
         const grid = document.createElement("div");
         grid.className = "comp-grid";
-        grid.appendChild(renderCard({ name: data.leftname, state: data.leftstate, position: data.leftposition }, "left"));
-        grid.appendChild(renderCard({ name: data.rightname, state: data.rightstate, position: data.rightposition }, "right"));
+        (data.blinds || []).forEach(function (item) { grid.appendChild(renderCard(item)); });
         container.appendChild(grid);
     }
 
-    function setState(side, state) {
-        const param = side === "left" ? "leftstate" : "rightstate";
-        fetch("/api/blinds?" + param + "=" + state).finally(refresh);
+    function setState(id, state) {
+        fetch("/api/blinds?id=" + id + "&state=" + state).finally(refresh);
     }
 
     function refresh() {

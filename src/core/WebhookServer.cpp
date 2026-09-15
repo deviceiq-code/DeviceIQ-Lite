@@ -4,31 +4,24 @@
 
 #include "core/Settings.h"
 #include "core/Logger.h"
-#include "Blinds.h"
-
-extern Blinds *BlindL, *BlindR;
+#include "components/ComponentManager.h"
+#include "components/Blinds.h"
 
 namespace {
-    void AppendBlindJson(JsonObject entry, int id, const String& name, Blinds* blind) {
-        entry["id"] = id;
-        entry["name"] = name;
+    void AppendBlindJson(JsonObject entry, const blinds& target) {
+        entry["id"] = target.ID();
+        entry["name"] = target.Name();
         entry["class"] = "Blinds";
-        entry["enabled"] = true;
-        entry["state"] = BlindStateName(blind->State());
-        entry["position"] = blind->Position();
-        entry["targetPosition"] = blind->TargetPosition();
+        entry["enabled"] = target.Enabled();
+        entry["state"] = blinds::StateName(target.State());
+        entry["position"] = target.Position();
+        entry["targetPosition"] = target.TargetPosition();
     }
 
-    Blinds* BlindByID(int id) {
-        if(id == 1) return BlindL;
-        if(id == 2) return BlindR;
-        return nullptr;
-    }
-
-    String NameByID(int id) {
-        if(id == 1) return Settings.BlindL_Name();
-        if(id == 2) return Settings.BlindR_Name();
-        return String();
+    blinds* BlindByID(int id) {
+        component* found = Components.FindByID((int16_t)id);
+        if(found == nullptr || found->Class() != component::Classes::Blinds) return nullptr;
+        return static_cast<blinds*>(found);
     }
 
     String ParamOr(AsyncWebServerRequest *request, const char* name, const String& fallback = "") {
@@ -69,15 +62,20 @@ void webhookserver::HandleGet(AsyncWebServerRequest *request) {
     JsonDocument doc;
 
     if(!request->hasParam("id")) {
-        // No id: report both blinds, mirroring the web UI's /api/blinds.
-        JsonArray components = doc["components"].to<JsonArray>();
-        AppendBlindJson(components.add<JsonObject>(), 1, Settings.BlindL_Name(), BlindL);
-        AppendBlindJson(components.add<JsonObject>(), 2, Settings.BlindR_Name(), BlindR);
+        // No id: report every registered blind, mirroring the web UI's
+        // /api/blinds.
+        JsonArray items = doc["components"].to<JsonArray>();
+        for(size_t i = 0; i < Components.Count(); i++) {
+            component* item = Components.At(i);
+            if(item != nullptr && item->IsPublic() && item->Class() == component::Classes::Blinds) {
+                AppendBlindJson(items.add<JsonObject>(), static_cast<const blinds&>(*item));
+            }
+        }
     } else {
         int id = ParamOr(request, "id").toInt();
-        Blinds* target = BlindByID(id);
+        blinds* target = BlindByID(id);
         if(target == nullptr) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
-        AppendBlindJson(doc.to<JsonObject>(), id, NameByID(id), target);
+        AppendBlindJson(doc.to<JsonObject>(), *target);
     }
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -103,7 +101,7 @@ void webhookserver::HandleSet(AsyncWebServerRequest *request) {
     String property = ParamOr(request, "property");
     String value = ParamOr(request, "value");
 
-    Blinds* target = BlindByID(id);
+    blinds* target = BlindByID(id);
     if(target == nullptr) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
 
     bool accepted = true;
@@ -114,14 +112,14 @@ void webhookserver::HandleSet(AsyncWebServerRequest *request) {
         else accepted = false;
     } else if(property.equalsIgnoreCase("position")) {
         int position = value.toInt();
-        if(position < 0 || position > DEF_Max_Position) accepted = false;
-        else target->Position((uint8_t)position);
+        if(position < 0 || position > blinds::MAX_POSITION) accepted = false;
+        else target->SetPosition((uint8_t)position);
     } else {
         accepted = false;
     }
 
     Logger.Write(
-        "Webhooks: component set " + String(accepted ? "accepted" : "rejected") + " from " + remoteIP.toString() + ": " + NameByID(id) + "." + property + "=" + value,
+        "Webhooks: component set " + String(accepted ? "accepted" : "rejected") + " from " + remoteIP.toString() + ": " + target->Name() + "." + property + "=" + value,
         accepted ? logger::Information : logger::Warning
     );
 

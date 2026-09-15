@@ -8,11 +8,11 @@ namespace {
     // Matches DeviceIQ's own Blinds state-name logic exactly: a blind that
     // isn't actively moving is described by where it ended up, not by the
     // fact that it happens to be stopped.
-    const char* BlindMQTTState(Blinds_State state, uint8_t position) {
-        if(state == Blinds_State::Opening) return "opening";
-        if(state == Blinds_State::Closing) return "closing";
+    const char* BlindMQTTState(blinds::Motion state, uint8_t position) {
+        if(state == blinds::Motion::Opening) return "opening";
+        if(state == blinds::Motion::Closing) return "closing";
         if(position == 0) return "closed";
-        if(position == 100) return "open";
+        if(position == blinds::MAX_POSITION) return "open";
         return "stopped";
     }
 }
@@ -95,8 +95,7 @@ bool mqttclient::Connect() {
     // A fresh connection means Home Assistant (or a broker with no
     // retained messages) has nothing to show yet - republish regardless of
     // whether the position/state actually changed since last time.
-    pHavePublishedLeft = false;
-    pHavePublishedRight = false;
+    for(auto& entry : pBlindCache) entry.published = false;
     PublishStateIfChanged();
 
     return true;
@@ -123,14 +122,12 @@ void mqttclient::HandleMessage(const String& topic, const uint8_t* payload, size
     String property = relative.substring(second + 1);
     if(!direction.equalsIgnoreCase("Set") || property.length() == 0) return;
 
-    Blinds* target = nullptr;
-    if(componentName == Settings.BlindL_Name()) target = BlindL;
-    else if(componentName == Settings.BlindR_Name()) target = BlindR;
-
-    if(target == nullptr) {
+    component* found = Components.FindByName(componentName);
+    if(found == nullptr || !found->IsPublic() || found->Class() != component::Classes::Blinds) {
         Logger.Write("MQTT target not found: " + componentName, logger::Warning);
         return;
     }
+    blinds* target = static_cast<blinds*>(found);
 
     String value;
     value.reserve(length);
@@ -144,10 +141,10 @@ void mqttclient::HandleMessage(const String& topic, const uint8_t* payload, size
         else Logger.Write("MQTT command rejected: " + componentName + ".state=" + value, logger::Warning);
     } else if(property.equalsIgnoreCase("position")) {
         int position = value.toInt();
-        if(position < 0 || position > DEF_Max_Position) {
+        if(position < 0 || position > blinds::MAX_POSITION) {
             Logger.Write("MQTT command rejected: " + componentName + ".position=" + value, logger::Warning);
         } else {
-            target->Position((uint8_t)position);
+            target->SetPosition((uint8_t)position);
         }
     } else {
         Logger.Write("MQTT command rejected: " + componentName + "." + property + " not supported", logger::Warning);
@@ -155,22 +152,21 @@ void mqttclient::HandleMessage(const String& topic, const uint8_t* payload, size
 }
 
 void mqttclient::PublishStateIfChanged() {
-    uint8_t leftPosition = BlindL->Position();
-    Blinds_State leftState = BlindL->State();
-    if(!pHavePublishedLeft || leftPosition != pLastLeftPosition || leftState != pLastLeftState) {
-        PublishBlindState(Settings.BlindL_Name(), leftPosition, BlindMQTTState(leftState, leftPosition));
-        pLastLeftPosition = leftPosition;
-        pLastLeftState = leftState;
-        pHavePublishedLeft = true;
-    }
+    for(size_t i = 0; i < Components.Count() && i < ComponentManager::MAX_COMPONENTS; i++) {
+        component* item = Components.At(i);
+        if(item == nullptr || !item->IsPublic() || item->Class() != component::Classes::Blinds) continue;
 
-    uint8_t rightPosition = BlindR->Position();
-    Blinds_State rightState = BlindR->State();
-    if(!pHavePublishedRight || rightPosition != pLastRightPosition || rightState != pLastRightState) {
-        PublishBlindState(Settings.BlindR_Name(), rightPosition, BlindMQTTState(rightState, rightPosition));
-        pLastRightPosition = rightPosition;
-        pLastRightState = rightState;
-        pHavePublishedRight = true;
+        const blinds& target = static_cast<const blinds&>(*item);
+        BlindPublishState& cache = pBlindCache[i];
+        uint8_t position = target.Position();
+        blinds::Motion state = target.State();
+
+        if(!cache.published || position != cache.position || state != cache.state) {
+            PublishBlindState(target.Name(), position, BlindMQTTState(state, position));
+            cache.position = position;
+            cache.state = state;
+            cache.published = true;
+        }
     }
 }
 
@@ -182,12 +178,18 @@ void mqttclient::PublishBlindState(const String& name, uint8_t position, const c
 
 void mqttclient::PublishDiscovery() {
     if(!pDiscoveryEnabled || !pClient.connected()) return;
-    if(ValidTopicSegment(Settings.BlindL_Name())) PublishBlindDiscovery(Settings.BlindL_Name(), "left_cover");
-    if(ValidTopicSegment(Settings.BlindR_Name())) PublishBlindDiscovery(Settings.BlindR_Name(), "right_cover");
+
+    for(size_t i = 0; i < Components.Count(); i++) {
+        component* item = Components.At(i);
+        if(item == nullptr || !item->IsPublic() || item->Class() != component::Classes::Blinds) continue;
+        const blinds& target = static_cast<const blinds&>(*item);
+        if(ValidTopicSegment(target.Name())) PublishBlindDiscovery(target);
+    }
 }
 
-void mqttclient::PublishBlindDiscovery(const String& name, const String& uniqueSuffix) {
-    String unique = UniqueID(uniqueSuffix);
+void mqttclient::PublishBlindDiscovery(const blinds& target) {
+    const String& name = target.Name();
+    String unique = UniqueID("blind" + String(target.ID()) + "_cover");
 
     JsonDocument doc;
     doc["name"] = name;

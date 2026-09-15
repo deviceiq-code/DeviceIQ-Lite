@@ -4,9 +4,8 @@
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
 #include <ESP8266WiFi.h>
-#include "Blinds.h"
-
-extern Blinds *BlindL, *BlindR;
+#include "components/ComponentManager.h"
+#include "components/Blinds.h"
 
 // Same shape as DeviceIQ's mqttclient: connect, publish blind state,
 // publish Home Assistant MQTT discovery for each blind as a "cover", and
@@ -43,7 +42,7 @@ class mqttclient {
         bool Connect();
         void HandleMessage(const String& topic, const uint8_t* payload, size_t length);
         void PublishDiscovery();
-        void PublishBlindDiscovery(const String& name, const String& uniqueSuffix);
+        void PublishBlindDiscovery(const blinds& target);
         void PublishStateIfChanged();
         void PublishBlindState(const String& name, uint8_t position, const char* state);
         bool Publish(const String& topic, const String& payload, bool retained = false);
@@ -72,11 +71,15 @@ class mqttclient {
         unsigned long pLastConnectAttemptMs = 0;
         bool pDiscoveryPending = false;
 
-        // Last state actually published, so PublishStateIfChanged() only
+        // Last state actually published per Blinds component (indexed by
+        // ComponentManager slot, not ID), so PublishStateIfChanged() only
         // publishes on an actual change instead of every Loop() call.
-        bool pHavePublishedLeft = false, pHavePublishedRight = false;
-        uint8_t pLastLeftPosition = 0, pLastRightPosition = 0;
-        Blinds_State pLastLeftState = Blinds_State::Stopped, pLastRightState = Blinds_State::Stopped;
+        struct BlindPublishState {
+            bool published = false;
+            uint8_t position = 0;
+            blinds::Motion state = blinds::Motion::Stopped;
+        };
+        BlindPublishState pBlindCache[ComponentManager::MAX_COMPONENTS];
 };
 
 extern mqttclient MQTTClient;

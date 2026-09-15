@@ -9,9 +9,8 @@
 // port, entirely independent of Webserver (the browser-facing admin UI) -
 // no sessions, no cookies, no file serving. Route names and parameters
 // (/component/get, /component/set, id/property/value/token) match
-// DeviceIQ's own webhookserver; id 1 is the left blind, 2 the right one -
-// DeviceIQ resolves id against its dynamic component list, Lite just has
-// the two fixed blinds to pick from.
+// DeviceIQ's own webhookserver; id is resolved against the dynamic
+// component list installed from config.json, same as DeviceIQ.
 //
 // Unlike DeviceIQ's version, this needs no FreeRTOS task of its own:
 // AsyncWebServer is already event-driven on top of the same networking the

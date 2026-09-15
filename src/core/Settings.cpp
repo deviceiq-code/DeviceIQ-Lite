@@ -11,39 +11,6 @@ namespace {
 
 }
 
-String settings::LegacyReadString(uint16_t Address) {
-    char Data[255];
-    uint8_t len = 0;
-    char k;
-    k = EEPROM.read(Address);
-    while(k != '\0' && len < 255) {
-        k = EEPROM.read(Address + len);
-        Data[len] = k;
-        len++;
-    }
-    Data[len]='\0';
-    return String(Data);
-}
-
-bool settings::LegacyReadBool(uint16_t Address) {
-    return bool(LegacyReadInt8(Address));
-}
-
-int8_t settings::LegacyReadInt8(uint16_t Address) {
-    return EEPROM.read(Address);
-}
-
-int16_t settings::LegacyReadInt16(uint16_t Address) {
-    byte H, L;
-    H = EEPROM.read(Address);
-    L = EEPROM.read(Address + 1);
-    return ((H << 8) + L);
-}
-
-IPAddress settings::LegacyReadIP(uint16_t Address) {
-    return IPAddress(LegacyReadInt8(Address), LegacyReadInt8(Address + 1), LegacyReadInt8(Address + 2), LegacyReadInt8(Address + 3));
-}
-
 void settings::LoadDefaults() {
     mNetwork_Hostname = Defaults.Network.Hostname();
     mNetwork_SSID = Defaults.Network.SSID;
@@ -63,17 +30,6 @@ void settings::LoadDefaults() {
     mNetwork_FallbackAPSSID = Defaults.Network.FallbackAPSSID;
     mNetwork_FallbackAPPassword = Defaults.Network.FallbackAPPassword;
     mNetwork_FallbackAPRetention = Defaults.Network.FallbackAPRetention;
-
-    mBlindL_StepTime = Defaults.Components.Blinds.StepTimeMs;
-    mBlindR_StepTime = Defaults.Components.Blinds.StepTimeMs;
-    mBlindL_Name = Defaults.Components.Blinds.LeftName;
-    mBlindR_Name = Defaults.Components.Blinds.RightName;
-    mBlindL_ButtonOpen = Defaults.Components.Blinds.ButtonOpen;
-    mBlindR_ButtonOpen = Defaults.Components.Blinds.ButtonOpen;
-    mBlindL_ButtonClose = Defaults.Components.Blinds.ButtonClose;
-    mBlindR_ButtonClose = Defaults.Components.Blinds.ButtonClose;
-    mBlindL_InvertButtons = Defaults.Components.Blinds.InvertButtons;
-    mBlindR_InvertButtons = Defaults.Components.Blinds.InvertButtons;
 
     mSyslog_Server = Defaults.Log.SyslogServer;
     mSyslog_Port = Defaults.Log.SyslogPort;
@@ -101,65 +57,15 @@ void settings::AddDefaultUserAccount() {
     Users.Add(Defaults.Users.User.Username, Defaults.Users.User.Password, false);
 }
 
-// One-time migration for devices coming from a firmware that stored
-// preferences in EEPROM. Returns false when EEPROM holds nothing usable
-// (e.g. a brand new device), in which case defaults are kept as-is.
-bool settings::LoadLegacyEEPROM() {
-    EEPROM.begin(4096);
-
-    String SSID = LegacyReadString(EEPROM_ADDR_WIFI_SSID);
-    if(SSID == "") return false;
-
-    mNetwork_SSID = SSID;
-    mNetwork_Password = LegacyReadString(EEPROM_ADDR_WIFI_PASSWORD);
-    mNetwork_DHCPClient = LegacyReadBool(EEPROM_ADDR_WIFI_DHCPCLIENT);
-    mNetwork_IPAddress = LegacyReadIP(EEPROM_ADDR_WIFI_IPADDRESS);
-    mNetwork_Mask = LegacyReadIP(EEPROM_ADDR_WIFI_MASK);
-    mNetwork_Gateway = LegacyReadIP(EEPROM_ADDR_WIFI_GATEWAY);
-    mNetwork_HTTP_Port = LegacyReadInt16(EEPROM_ADDR_WIFI_HTTP_PORT);
-
-    // "Room Name" doesn't exist as a concept anymore, but its old value is
-    // still a reasonable starting Hostname rather than throwing it away.
-    String LegacyRoomName = LegacyReadString(EEPROM_ADDR_ROOM_NAME);
-    if(LegacyRoomName.length()) mNetwork_Hostname = LegacyRoomName;
-
-    mBlindL_StepTime = LegacyReadInt16(EEPROM_ADDR_BLINDL_STEPTIME);
-    mBlindR_StepTime = LegacyReadInt16(EEPROM_ADDR_BLINDR_STEPTIME);
-    mBlindL_Name = LegacyReadString(EEPROM_ADDR_BLINDL_NAME);
-    mBlindR_Name = LegacyReadString(EEPROM_ADDR_BLINDR_NAME);
-    mBlindL_ButtonOpen = LegacyReadBool(EEPROM_ADDR_BLINDL_BUTTONOPEN);
-    mBlindR_ButtonOpen = LegacyReadBool(EEPROM_ADDR_BLINDR_BUTTONOPEN);
-    mBlindL_ButtonClose = LegacyReadBool(EEPROM_ADDR_BLINDL_BUTTONCLOSE);
-    mBlindR_ButtonClose = LegacyReadBool(EEPROM_ADDR_BLINDR_BUTTONCLOSE);
-    mBlindL_InvertButtons = LegacyReadBool(EEPROM_ADDR_BLINDL_INVBUTTON);
-    mBlindR_InvertButtons = LegacyReadBool(EEPROM_ADDR_BLINDR_INVBUTTON);
-
-    // The old EEPROM layout never stored a username, only this password -
-    // the account was always implicitly "admin".
-    String LegacyAdminPassword = LegacyReadString(EEPROM_ADDR_SECURITY_ADMINPASSWORD);
-    Users.Add(Defaults.Users.Admin.Username, LegacyAdminPassword.length() ? LegacyAdminPassword : String(Defaults.Users.Admin.Password), true);
-    AddDefaultUserAccount();
-
-    mSyslog_Server = LegacyReadIP(EEPROM_ADDR_SYSLOG_SERVER);
-    mSyslog_Port = LegacyReadInt16(EEPROM_ADDR_SYSLOG_PORT);
-    // The old bool only ever toggled Syslog; Serial logging was always on.
-    mLog_Endpoint = logger::Endpoints::Serial | (LegacyReadBool(EEPROM_ADDR_SYSLOG_ENABLED) ? logger::Endpoints::Syslog : logger::Endpoints::NoLog);
-
-    return true;
-}
-
 bool settings::Load(const String& ConfigFileName) {
     LoadDefaults();
+    LegacyBlindsSeed BlindsSeed;
 
     if(!LittleFS.exists(ConfigFileName)) {
-        // LoadLegacyEEPROM() seeds both default accounts itself when it
-        // finds something to migrate; a truly brand new device still needs
-        // them, or nothing could ever log in.
-        if(!LoadLegacyEEPROM()) {
-            Users.Add(Defaults.Users.Admin.Username, Defaults.Users.Admin.Password, true);
-            AddDefaultUserAccount();
-        }
+        Users.Add(Defaults.Users.Admin.Username, Defaults.Users.Admin.Password, true);
+        AddDefaultUserAccount();
         Save(ConfigFileName);
+        EnsureDefaultComponents(ConfigFileName, BlindsSeed);
         return false;
     }
 
@@ -193,19 +99,22 @@ bool settings::Load(const String& ConfigFileName) {
     mNetwork_FallbackAPPassword = String((const char*)(network["Fallback AP Password"] | Defaults.Network.FallbackAPPassword));
     mNetwork_FallbackAPRetention = network["Fallback AP Retention"] | Defaults.Network.FallbackAPRetention;
 
+    // Only relevant on a config.json saved by a pre-Components firmware
+    // version - used solely to seed the default Components object below,
+    // not stored as live settings state anymore.
     JsonObjectConst blindL = root["Blinds"]["Left"];
-    mBlindL_Name = String((const char*)(blindL["Name"] | Defaults.Components.Blinds.LeftName));
-    mBlindL_StepTime = blindL["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
-    mBlindL_ButtonOpen = blindL["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
-    mBlindL_ButtonClose = blindL["Button Close"] | Defaults.Components.Blinds.ButtonClose;
-    mBlindL_InvertButtons = blindL["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
+    BlindsSeed.LeftName = String((const char*)(blindL["Name"] | Defaults.Components.Blinds.LeftName));
+    BlindsSeed.LeftStepTime = blindL["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
+    BlindsSeed.LeftButtonOpen = blindL["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
+    BlindsSeed.LeftButtonClose = blindL["Button Close"] | Defaults.Components.Blinds.ButtonClose;
+    BlindsSeed.LeftInvertButtons = blindL["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
 
     JsonObjectConst blindR = root["Blinds"]["Right"];
-    mBlindR_Name = String((const char*)(blindR["Name"] | Defaults.Components.Blinds.RightName));
-    mBlindR_StepTime = blindR["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
-    mBlindR_ButtonOpen = blindR["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
-    mBlindR_ButtonClose = blindR["Button Close"] | Defaults.Components.Blinds.ButtonClose;
-    mBlindR_InvertButtons = blindR["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
+    BlindsSeed.RightName = String((const char*)(blindR["Name"] | Defaults.Components.Blinds.RightName));
+    BlindsSeed.RightStepTime = blindR["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
+    BlindsSeed.RightButtonOpen = blindR["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
+    BlindsSeed.RightButtonClose = blindR["Button Close"] | Defaults.Components.Blinds.ButtonClose;
+    BlindsSeed.RightInvertButtons = blindR["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
 
     // Kept only for the legacy-plaintext-admin migration below; the
     // Security_Method concept it used to also carry (Auth/WebUI/JSON/
@@ -277,10 +186,26 @@ bool settings::Load(const String& ConfigFileName) {
     mWebhooks_Token = String((const char*)(webhooks["Token"] | Defaults.Webhooks.Token));
     mWebhooks_Port = webhooks["Port"] | Defaults.Webhooks.Port;
 
+    EnsureDefaultComponents(ConfigFileName, BlindsSeed);
+
     return true;
 }
 
 bool settings::Save(const String& ConfigFileName) {
+    // Read whatever is already on disk first, so this rewrite doesn't wipe
+    // out the Components catalog - Save() only ever touches Network/Log/
+    // General/MQTT/Webhooks/Users; components are installed once at boot
+    // and edited independently (config import, or a future component
+    // property editor), never regenerated from live state here.
+    JsonDocument existingDoc;
+    if(LittleFS.exists(ConfigFileName)) {
+        File existingFile = LittleFS.open(ConfigFileName, "r");
+        if(existingFile) {
+            deserializeJson(existingDoc, existingFile);
+            existingFile.close();
+        }
+    }
+
     JsonDocument doc;
 
     JsonObject network = doc["Network"].to<JsonObject>();
@@ -302,21 +227,6 @@ bool settings::Save(const String& ConfigFileName) {
     network["Fallback AP SSID"] = mNetwork_FallbackAPSSID;
     network["Fallback AP Password"] = mNetwork_FallbackAPPassword;
     network["Fallback AP Retention"] = mNetwork_FallbackAPRetention;
-
-    JsonObject blinds = doc["Blinds"].to<JsonObject>();
-    JsonObject blindL = blinds["Left"].to<JsonObject>();
-    blindL["Name"] = mBlindL_Name;
-    blindL["Step Time"] = mBlindL_StepTime;
-    blindL["Button Open"] = mBlindL_ButtonOpen;
-    blindL["Button Close"] = mBlindL_ButtonClose;
-    blindL["Invert Buttons"] = mBlindL_InvertButtons;
-
-    JsonObject blindR = blinds["Right"].to<JsonObject>();
-    blindR["Name"] = mBlindR_Name;
-    blindR["Step Time"] = mBlindR_StepTime;
-    blindR["Button Open"] = mBlindR_ButtonOpen;
-    blindR["Button Close"] = mBlindR_ButtonClose;
-    blindR["Invert Buttons"] = mBlindR_InvertButtons;
 
     JsonArray users = doc["Users"].to<JsonArray>();
     Users.ForEachStored([&](const String& username, bool admin, const uint8_t (&salt)[PASS_SALTLEN], const uint8_t (&hash)[PASS_HASHLEN]) {
@@ -354,6 +264,12 @@ bool settings::Save(const String& ConfigFileName) {
     webhooks["Token"] = mWebhooks_Token;
     webhooks["Port"] = mWebhooks_Port;
 
+    // Carry the Components catalog forward untouched.
+    if(!existingDoc["Components"].isNull()) {
+        doc["ComponentSchemaVersion"] = existingDoc["ComponentSchemaVersion"] | 1;
+        doc["Components"].set(existingDoc["Components"]);
+    }
+
     File file = LittleFS.open(ConfigFileName, "w");
     if(!file) return false;
 
@@ -369,6 +285,11 @@ void settings::FactoryReset() {
     Users.Add(Defaults.Users.Admin.Username, Defaults.Users.Admin.Password, true);
     AddDefaultUserAccount();
     Save();
+    EnsureDefaultComponents(CONFIG_FILE_NAME, LegacyBlindsSeed(), true);
+
+    // Stale runtime state (keyed by component ID) from before the reset
+    // could otherwise silently override the fresh defaults on next boot.
+    LittleFS.remove(STATE_FILE_NAME);
 }
 
 void settings::CheckButtonsFactoryReset() {

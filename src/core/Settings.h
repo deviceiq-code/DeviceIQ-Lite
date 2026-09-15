@@ -1,7 +1,6 @@
 #pragma once
 
 #include <Arduino.h>
-#include <EEPROM.h>
 #include <ArduinoJson.h>
 #include "IPAddress.h"
 #include "core/Defaults.h"
@@ -14,77 +13,45 @@ const char* const CONFIG_FILE_NAME = "/config.json";
 // (validates, writes here) and /api/config/import/apply (commits it).
 const char* const CONFIG_IMPORT_FILE_NAME = "/config.import.json";
 
-// Legacy EEPROM layout, used only to migrate preferences saved by firmware
-// versions prior to the switch to config.json. Blind position (the only
-// value still persisted to EEPROM, since it changes far too often for a
-// flash-backed file) keeps living at its historical addresses below.
-const uint16_t EEPROM_ADDR_WIFI_SSID = 0;
-const uint16_t EEPROM_SIZE_WIFI_SSID = 32;
-const uint16_t EEPROM_ADDR_WIFI_PASSWORD = EEPROM_SIZE_WIFI_SSID; // 32
-const uint16_t EEPROM_SIZE_WIFI_PASSWORD = 64;
-const uint16_t EEPROM_ADDR_WIFI_DHCPCLIENT = EEPROM_ADDR_WIFI_PASSWORD + EEPROM_SIZE_WIFI_PASSWORD; // 96
-const uint16_t EEPROM_SIZE_WIFI_DHCPCLIENT = 1;
-const uint16_t EEPROM_ADDR_WIFI_IPADDRESS = EEPROM_ADDR_WIFI_DHCPCLIENT + EEPROM_SIZE_WIFI_DHCPCLIENT; // 97
-const uint16_t EEPROM_SIZE_WIFI_IPADDRESS = 4;
-const uint16_t EEPROM_ADDR_WIFI_MASK = EEPROM_ADDR_WIFI_IPADDRESS + EEPROM_SIZE_WIFI_IPADDRESS; // 101
-const uint16_t EEPROM_SIZE_WIFI_MASK = 4;
-const uint16_t EEPROM_ADDR_WIFI_GATEWAY = EEPROM_ADDR_WIFI_MASK + EEPROM_SIZE_WIFI_MASK; // 101
-const uint16_t EEPROM_SIZE_WIFI_GATEWAY = 4;
-const uint16_t EEPROM_ADDR_WIFI_HTTP_PORT = EEPROM_ADDR_WIFI_GATEWAY + EEPROM_SIZE_WIFI_GATEWAY; // 105
-const uint16_t EEPROM_SIZE_WIFI_HTTP_PORT = 2;
-const uint16_t EEPROM_ADDR_BLINDL_STEPTIME = EEPROM_ADDR_WIFI_HTTP_PORT + EEPROM_SIZE_WIFI_HTTP_PORT; // 109
-const uint16_t EEPROM_SIZE_BLINDL_STEPTIME = 2;
-const uint16_t EEPROM_ADDR_BLINDR_STEPTIME = EEPROM_ADDR_BLINDL_STEPTIME + EEPROM_SIZE_BLINDL_STEPTIME; // 111
-const uint16_t EEPROM_SIZE_BLINDR_STEPTIME = 2;
-const uint16_t EEPROM_ADDR_ROOM_NAME = EEPROM_ADDR_BLINDR_STEPTIME + EEPROM_SIZE_BLINDR_STEPTIME; // 113
-const uint16_t EEPROM_SIZE_ROOM_NAME = 32;
-const uint16_t EEPROM_ADDR_BLINDL_NAME = EEPROM_ADDR_ROOM_NAME + EEPROM_SIZE_ROOM_NAME; // 113
-const uint16_t EEPROM_SIZE_BLINDL_NAME = 32;
-const uint16_t EEPROM_ADDR_BLINDR_NAME = EEPROM_ADDR_BLINDL_NAME + EEPROM_SIZE_BLINDL_NAME; // 145
-const uint16_t EEPROM_SIZE_BLINDR_NAME = 32;
-const uint16_t EEPROM_ADDR_SECURITY_AUTH = EEPROM_ADDR_BLINDR_NAME + EEPROM_SIZE_BLINDR_NAME; // 177
-const uint16_t EEPROM_SIZE_SECURITY_AUTH = 1;
-const uint16_t EEPROM_ADDR_SECURITY_WEBUI = EEPROM_ADDR_SECURITY_AUTH + EEPROM_SIZE_SECURITY_AUTH; // 178
-const uint16_t EEPROM_SIZE_SECURITY_WEBUI = 1;
-const uint16_t EEPROM_ADDR_SECURITY_JSON = EEPROM_ADDR_SECURITY_WEBUI + EEPROM_SIZE_SECURITY_WEBUI; // 179
-const uint16_t EEPROM_SIZE_SECURITY_JSON = 1;
-const uint16_t EEPROM_ADDR_SECURITY_CONFIG = EEPROM_ADDR_SECURITY_JSON + EEPROM_SIZE_SECURITY_JSON; // 180
-const uint16_t EEPROM_SIZE_SECURITY_CONFIG = 1;
-const uint16_t EEPROM_ADDR_SECURITY_ADMINPASSWORD = EEPROM_ADDR_SECURITY_CONFIG + EEPROM_SIZE_SECURITY_CONFIG; // 181
-const uint16_t EEPROM_SIZE_SECURITY_ADMINPASSWORD = 32;
-const uint16_t EEPROM_ADDR_BLINDL_POSITION = EEPROM_ADDR_SECURITY_ADMINPASSWORD + EEPROM_SIZE_SECURITY_ADMINPASSWORD; // 213
-const uint16_t EEPROM_SIZE_BLINDL_POSITION = 1;
-const uint16_t EEPROM_ADDR_BLINDR_POSITION = EEPROM_ADDR_BLINDL_POSITION + EEPROM_SIZE_BLINDL_POSITION; // 214
-const uint16_t EEPROM_SIZE_BLINDR_POSITION = 1;
-const uint16_t EEPROM_ADDR_BLINDL_BUTTONOPEN = EEPROM_ADDR_BLINDR_POSITION + EEPROM_SIZE_BLINDR_POSITION; // 215
-const uint16_t EEPROM_SIZE_BLINDL_BUTTONOPEN = 1;
-const uint16_t EEPROM_ADDR_BLINDR_BUTTONOPEN = EEPROM_ADDR_BLINDL_BUTTONOPEN + EEPROM_SIZE_BLINDL_BUTTONOPEN; // 216
-const uint16_t EEPROM_SIZE_BLINDR_BUTTONOPEN = 1;
-const uint16_t EEPROM_ADDR_BLINDL_BUTTONCLOSE = EEPROM_ADDR_BLINDR_BUTTONOPEN + EEPROM_SIZE_BLINDR_BUTTONOPEN; // 217
-const uint16_t EEPROM_SIZE_BLINDL_BUTTONCLOSE = 1;
-const uint16_t EEPROM_ADDR_BLINDR_BUTTONCLOSE = EEPROM_ADDR_BLINDL_BUTTONCLOSE + EEPROM_SIZE_BLINDL_BUTTONCLOSE; // 218
-const uint16_t EEPROM_SIZE_BLINDR_BUTTONCLOSE = 1;
-const uint16_t EEPROM_ADDR_BLINDL_INVBUTTON = EEPROM_ADDR_BLINDR_BUTTONCLOSE + EEPROM_SIZE_BLINDR_BUTTONCLOSE; // 219
-const uint16_t EEPROM_SIZE_BLINDL_INVBUTTON = 1;
-const uint16_t EEPROM_ADDR_BLINDR_INVBUTTON = EEPROM_ADDR_BLINDL_INVBUTTON + EEPROM_SIZE_BLINDL_INVBUTTON; // 220
-const uint16_t EEPROM_SIZE_BLINDR_INVBUTTON = 1;
-const uint16_t EEPROM_ADDR_SYSLOG_SERVER = EEPROM_ADDR_BLINDR_INVBUTTON + EEPROM_SIZE_BLINDR_INVBUTTON; // 221
-const uint16_t EEPROM_SIZE_SYSLOG_SERVER = 4;
-const uint16_t EEPROM_ADDR_SYSLOG_PORT = EEPROM_ADDR_SYSLOG_SERVER + EEPROM_SIZE_SYSLOG_SERVER; // 225
-const uint16_t EEPROM_SIZE_SYSLOG_PORT = 2;
-const uint16_t EEPROM_ADDR_SYSLOG_ENABLED = EEPROM_ADDR_SYSLOG_PORT + EEPROM_SIZE_SYSLOG_PORT; // 227
-const uint16_t EEPROM_SIZE_SYSLOG_ENABLED = 1;
+// Live, frequently-changing component state (currently Relay.State and
+// Blinds.Position), kept out of config.json and regenerated from scratch on
+// every save - same split DeviceIQ uses between config.json and state.json.
+// No EEPROM anywhere in Lite: LittleFS handles wear-leveling on its own,
+// unlike the single fixed sector the ESP8266 EEPROM emulation writes to.
+const char* const STATE_FILE_NAME = "/state.json";
+
+// How often loop() checks whether any component's persisted state changed
+// and, if so, writes state.json - not on every single change (which for a
+// moving Blinds would mean a write per 1% step), matching DeviceIQ's
+// default Settings.General.SaveStatePooling of 20 seconds (fixed here
+// rather than user-configurable).
+const uint32_t STATE_SAVE_INTERVAL_MS = 20000;
+
+// Blind-specific values recovered from a pre-Components config.json during
+// migration, used only once to seed the default Components object - see
+// settings::EnsureDefaultComponents() in ComponentConfig.cpp. Not part of
+// the live settings state.
+struct LegacyBlindsSeed {
+    String LeftName = Defaults.Components.Blinds.LeftName;
+    String RightName = Defaults.Components.Blinds.RightName;
+    uint16_t LeftStepTime = Defaults.Components.Blinds.StepTimeMs;
+    uint16_t RightStepTime = Defaults.Components.Blinds.StepTimeMs;
+    bool LeftButtonOpen = Defaults.Components.Blinds.ButtonOpen;
+    bool LeftButtonClose = Defaults.Components.Blinds.ButtonClose;
+    bool LeftInvertButtons = Defaults.Components.Blinds.InvertButtons;
+    bool RightButtonOpen = Defaults.Components.Blinds.ButtonOpen;
+    bool RightButtonClose = Defaults.Components.Blinds.ButtonClose;
+    bool RightInvertButtons = Defaults.Components.Blinds.InvertButtons;
+};
 
 class settings {
     private:
-        // Legacy EEPROM readers, used once by LoadLegacyEEPROM() to migrate
-        // devices that were still on the pre-config.json firmware.
-        String LegacyReadString(uint16_t Address);
-        bool LegacyReadBool(uint16_t Address);
-        int8_t LegacyReadInt8(uint16_t Address);
-        int16_t LegacyReadInt16(uint16_t Address);
-        IPAddress LegacyReadIP(uint16_t Address);
-        bool LoadLegacyEEPROM();
+        // Writes the default Components object (matching Lite's fixed PCB
+        // wiring - two Blinds, pins as in main.cpp's old hardcoded
+        // constructions) into ConfigFileName, unless a valid Components
+        // object is already present (or Force is true, used by
+        // FactoryReset()). Implemented in ComponentConfig.cpp.
+        bool EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed, bool Force = false);
 
         void LoadDefaults();
         // Adds DeviceIQ's second default account (non-admin "user"). Called
@@ -118,12 +85,6 @@ class settings {
         String mNetwork_FallbackAPPassword = Defaults.Network.FallbackAPPassword;
         uint16_t mNetwork_FallbackAPRetention = Defaults.Network.FallbackAPRetention;
         bool mAP_Mode = false;
-
-        uint16_t mBlindL_StepTime = Defaults.Components.Blinds.StepTimeMs, mBlindR_StepTime = Defaults.Components.Blinds.StepTimeMs;
-        String mBlindL_Name = Defaults.Components.Blinds.LeftName, mBlindR_Name = Defaults.Components.Blinds.RightName;
-        bool mBlindL_ButtonOpen = Defaults.Components.Blinds.ButtonOpen, mBlindR_ButtonOpen = Defaults.Components.Blinds.ButtonOpen;
-        bool mBlindL_ButtonClose = Defaults.Components.Blinds.ButtonClose, mBlindR_ButtonClose = Defaults.Components.Blinds.ButtonClose;
-        bool mBlindL_InvertButtons = Defaults.Components.Blinds.InvertButtons, mBlindR_InvertButtons = Defaults.Components.Blinds.InvertButtons;
 
         IPAddress mSyslog_Server = Defaults.Log.SyslogServer;
         uint16_t mSyslog_Port = Defaults.Log.SyslogPort;
@@ -191,27 +152,6 @@ class settings {
         inline bool AP_Mode() { return mAP_Mode; }
         inline void AP_Mode(bool Value) { mAP_Mode = Value; }
 
-        inline uint16_t BlindL_StepTime() { return mBlindL_StepTime; }
-        inline uint16_t BlindR_StepTime() { return mBlindR_StepTime; }
-        inline void BlindL_StepTime(uint16_t StepTime) { mBlindL_StepTime = StepTime; }
-        inline void BlindR_StepTime(uint16_t StepTime) { mBlindR_StepTime = StepTime; }
-        inline String BlindL_Name() { return mBlindL_Name; }
-        inline String BlindR_Name() { return mBlindR_Name; }
-        inline void BlindL_Name(String Name) { Name.replace(" ", ""); mBlindL_Name = Name.substring(0, 32); }
-        inline void BlindR_Name(String Name) { Name.replace(" ", ""); mBlindR_Name = Name.substring(0, 32); }
-        inline bool BlindL_ButtonOpen() { return mBlindL_ButtonOpen; }
-        inline bool BlindR_ButtonOpen() { return mBlindR_ButtonOpen; }
-        inline void BlindL_ButtonOpen(bool Value) { mBlindL_ButtonOpen = Value; }
-        inline void BlindR_ButtonOpen(bool Value) { mBlindR_ButtonOpen = Value; }
-        inline bool BlindL_ButtonClose() { return mBlindL_ButtonClose; }
-        inline bool BlindR_ButtonClose() { return mBlindR_ButtonClose; }
-        inline void BlindL_ButtonClose(bool Value) { mBlindL_ButtonClose = Value; }
-        inline void BlindR_ButtonClose(bool Value) { mBlindR_ButtonClose = Value; }
-        inline bool BlindL_InvertButtons() { return mBlindL_InvertButtons; }
-        inline bool BlindR_InvertButtons() { return mBlindR_InvertButtons; }
-        inline void BlindL_InvertButtons(bool Value) { mBlindL_InvertButtons = Value; }
-        inline void BlindR_InvertButtons(bool Value) { mBlindR_InvertButtons = Value; }
-
         inline IPAddress Syslog_Server() { return mSyslog_Server; }
         inline void Syslog_Server(IPAddress Server) { mSyslog_Server = Server; }
         inline uint16_t Syslog_Port() { return mSyslog_Port; }
@@ -252,6 +192,26 @@ class settings {
 
         bool Load(const String& ConfigFileName = CONFIG_FILE_NAME);
         bool Save(const String& ConfigFileName = CONFIG_FILE_NAME);
+
+        // Builds the dynamic component set (Relay/Button/Thermometer/Blinds)
+        // from the "Components" object in config.json and registers it with
+        // the global ComponentManager. Implemented in ComponentConfig.cpp.
+        // Must run after Load() and before ComponentManager::Start().
+        bool InstallComponents(const String& ConfigFileName = CONFIG_FILE_NAME);
+
+        // Writes state.json from every public component's live persisted
+        // state (Relay.State, Blinds.Position) - called from loop() at most
+        // once every STATE_SAVE_INTERVAL_MS, and only when
+        // ComponentManager::PersistenceRequired() says something actually
+        // changed. Implemented in ComponentConfig.cpp.
+        bool SaveComponentsState(const String& StateFileName = STATE_FILE_NAME);
+
+        // Applies a property change to a live component (Enabled for any
+        // class; StepTimeMs/ButtonOpenEnabled/ButtonCloseEnabled/
+        // InvertButtons for Blinds) and persists it into config.json so it
+        // survives a reboot. Backs POST /api/components. Implemented in
+        // ComponentConfig.cpp.
+        bool SetComponentProperty(int16_t ID, const String& Property, const String& Value, String& Error);
 
         void FactoryReset();
         void CheckButtonsFactoryReset();

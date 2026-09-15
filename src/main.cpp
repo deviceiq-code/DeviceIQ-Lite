@@ -12,10 +12,13 @@
 #include "core/MQTTClient.h"
 #include "core/WebhookServer.h"
 #include "Version.h"
-#include "Blinds.h"
 #include "Timer.h"
+#include "components/ComponentManager.h"
+#include "components/Relay.h"
+#include "components/Button.h"
+#include "components/Thermometer.h"
+#include "components/Blinds.h"
 
-Blinds *BlindL, *BlindR;
 AsyncWebServer *Webserver;
 Timer *GeneralTimer;
 
@@ -127,10 +130,20 @@ const char* UserManagementMessage(UserReturn result) {
 }
 
 void loop() {
-  BlindL->Control();
-  BlindR->Control();
+  uint32_t now = millis();
+  Components.Control(now);
   GeneralTimer->Control();
   MQTTClient.Loop();
+
+  // Checked periodically rather than on every state change - a moving
+  // Blinds would otherwise mean a state.json write per 1% step.
+  static uint32_t lastStateSaveCheck = 0;
+  if(now - lastStateSaveCheck >= STATE_SAVE_INTERVAL_MS) {
+    lastStateSaveCheck = now;
+    if(Components.PersistenceRequired() && !Settings.SaveComponentsState()) {
+      Logger.Write("Error saving component state.", logger::Warning);
+    }
+  }
 }
 
 void setup() {
@@ -214,19 +227,11 @@ void setup() {
 
   MDNS.begin(Settings.Network_Hostname());
 
-  // Left Blind
-  BlindL = new Blinds(Settings.BlindL_Name(), 5, 4, 14, 12, EEPROM_ADDR_BLINDL_POSITION);
-  BlindL->Step_Ms(Settings.BlindL_StepTime());
-  BlindL->ButtonOpenEnabled(Settings.BlindL_ButtonOpen());
-  BlindL->ButtonCloseEnabled(Settings.BlindL_ButtonClose());
-  BlindL->InvertButtons(Settings.BlindL_InvertButtons());  
-
-  // Right Blind
-  BlindR = new Blinds(Settings.BlindR_Name(), 0, 2, 13, 10, EEPROM_ADDR_BLINDR_POSITION);
-  BlindR->Step_Ms(Settings.BlindR_StepTime());
-  BlindR->ButtonOpenEnabled(Settings.BlindR_ButtonOpen());
-  BlindR->ButtonCloseEnabled(Settings.BlindR_ButtonClose());
-  BlindR->InvertButtons(Settings.BlindR_InvertButtons());
+  if(!Settings.InstallComponents()) {
+    Logger.Write("Failed to install components from config.json.", logger::Error);
+  } else if(!Components.Start()) {
+    Logger.Write("Failed to start components: " + Components.StartError(), logger::Error);
+  }
 
   Webserver = new AsyncWebServer(Settings.Network_HTTP_Port());
 
@@ -403,136 +408,143 @@ void setup() {
     Logger.Write("Web GET " + request->url());
   });
 
+  // Array-based and ID-addressed, unlike the old fixed left/right fields -
+  // any number of Blinds components can be registered from config.json.
+  // Not admin-gated: operating the blinds is this device's everyday
+  // function, not device configuration (same rationale as before).
   Webserver->on("/api/blinds", HTTP_GET, [](AsyncWebServerRequest *request) {
     WebSession *session = AuthenticatedSession(request);
     if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
 
-    if(request->args() == 0) { // Reading Info
+    auto appendBlind = [](JsonObject entry, const blinds& target) {
+      entry["id"] = target.ID();
+      entry["name"] = target.Name();
+      entry["state"] = blinds::StateName(target.State());
+      entry["position"] = target.Position();
+      entry["targetPosition"] = target.TargetPosition();
+      entry["stepTimeMs"] = target.StepTime();
+    };
+
+    if(!request->hasParam("id")) {
       JsonDocument doc;
-      doc["leftposition"] = BlindL->Position();
-      doc["leftsteptime"] = BlindL->Step_Ms();
-      doc["leftstate"] = BlindStateName(BlindL->State());
-      doc["leftname"] = BlindL->Name;
-      doc["rightposition"] = BlindR->Position();
-      doc["rightsteptime"] = BlindR->Step_Ms();
-      doc["rightstate"] = BlindStateName(BlindR->State());
-      doc["rightname"] = BlindR->Name;
+      JsonArray items = doc["blinds"].to<JsonArray>();
+      for(size_t i = 0; i < Components.Count(); i++) {
+        component *item = Components.At(i);
+        if(item != nullptr && item->IsPublic() && item->Class() == component::Classes::Blinds) {
+          appendBlind(items.add<JsonObject>(), static_cast<const blinds&>(*item));
+        }
+      }
 
       AsyncResponseStream *response = request->beginResponseStream("application/json");
       serializeJson(doc, *response);
       request->send(response);
       Logger.Write("Web GET " + request->url());
-    } else { // Setting Info
-      for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
-        String Arg = request->argName(i);
-        String Val = request->arg(i);
+      return;
+    }
 
-        Arg.toUpperCase();
-        
-        if(Arg == "LEFTPOSITION") {
-          if(Val == "?") {
-            request->send(200, "application/json", "{\"position\":" + String(BlindL->Position()) + "}");
-            Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(200, "application/json", "{\"position\":" + Val + "}");
-            Logger.Write("Web SET " + request->url() + " - Left-Position: " + Val);
+    int16_t id = (int16_t)request->getParam("id")->value().toInt();
+    component *found = Components.FindByID(id);
+    if(found == nullptr || found->Class() != component::Classes::Blinds) {
+      request->send(404, "application/json", "{\"error\":\"blind not found\"}");
+      return;
+    }
+    blinds &target = static_cast<blinds&>(*found);
 
-            volatile uint8_t tmpPos = constrain(Val.toInt(), 0, DEF_Max_Position);
-            BlindL->Position(tmpPos);
-          }
-        }
+    if(request->hasParam("state")) {
+      String value = request->getParam("state")->value();
+      if(value == "open") target.Open();
+      else if(value == "close") target.Close();
+      else if(value == "stop") target.Stop();
+      else { request->send(422, "application/json", "{\"error\":\"invalid state\"}"); return; }
+      Logger.Write("Web SET " + request->url() + " - " + target.Name() + ".state=" + value);
+    } else if(request->hasParam("position")) {
+      String value = request->getParam("position")->value();
+      int position = value.toInt();
+      if(position < 0 || position > blinds::MAX_POSITION) { request->send(422, "application/json", "{\"error\":\"invalid position\"}"); return; }
+      target.SetPosition((uint8_t)position);
+      Logger.Write("Web SET " + request->url() + " - " + target.Name() + ".position=" + value);
+    }
 
-        if(Arg == "LPOS") {
-          if(Val == "?") {
-            request->send(200, "text/plain", String(BlindL->Position()));
-            //Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(204);
-            Logger.Write("Web SET " + request->url() + " - Left-Position: " + Val);
+    JsonDocument doc;
+    appendBlind(doc.to<JsonObject>(), target);
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    serializeJson(doc, *response);
+    request->send(response);
+  });
 
-            volatile uint8_t tmpPos = constrain(Val.toInt(), 0, DEF_Max_Position);
-            BlindL->Position(tmpPos);
-          }
-        }
+  // Admin-only view/toggle of every configured component (Relay/Button/
+  // Thermometer/Blinds), backing setup.html's Components panel. Adding,
+  // removing or rewiring components is still done via config.json import -
+  // this only lists what's live and lets a handful of safe properties be
+  // changed without a restart.
+  Webserver->on("/api/components", HTTP_GET, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
 
-        if(Arg == "RIGHTPOSITION") {
-          if(Val == "?") {
-            request->send(200, "application/json", "{\"position\":" + String(BlindR->Position()) + "}");
-            Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(200, "application/json", "{\"position\":" + Val + "}");
-            Logger.Write("Web SET " + request->url() + " - Right-Position: " + Val);
+    JsonDocument doc;
+    JsonArray items = doc["components"].to<JsonArray>();
+    for(size_t i = 0; i < Components.Count(); i++) {
+      component *item = Components.At(i);
+      if(item == nullptr || !item->IsPublic()) continue;
 
-            volatile uint8_t tmpPos = constrain(Val.toInt(), 0, DEF_Max_Position);
-            BlindR->Position(tmpPos);
-          }
-        }
+      JsonObject entry = items.add<JsonObject>();
+      entry["id"] = item->ID();
+      entry["name"] = item->Name();
+      entry["class"] = component::ClassName(item->Class());
+      entry["enabled"] = item->Enabled();
 
-        if(Arg == "RPOS") {
-          if(Val == "?") {
-            request->send(200, "text/plain", String(BlindR->Position()));
-            //Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(204);
-            Logger.Write("Web SET " + request->url() + " - Right-Position: " + Val);
-
-            volatile uint8_t tmpPos = constrain(Val.toInt(), 0, DEF_Max_Position);
-            BlindR->Position(tmpPos);
-          }
-        }
-
-        if(Arg == "LEFTSTEPTIME") {
-          if(Val == "?") {
-            request->send(200, "application/json", "{\"steptime\":\"" + String(BlindL->Step_Ms()) + "\"}");
-            Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(200, "application/json", "{\"steptime\":" + Val + "}");
-            Logger.Write("Web SET " + request->url() + " - Left-StepTime: " + Val);
-
-            volatile uint16_t tmpPos = constrain(Val.toInt(), 1, 65535);
-            BlindL->Step_Ms(tmpPos);
-          }
-        }
-
-        if(Arg == "RIGHTSTEPTIME") {
-          if(Val == "?") {
-            request->send(200, "application/json", "{\"steptime\":" + String(BlindR->Step_Ms()) + "}");
-            Logger.Write("Web GET " + request->url());
-          } else {
-            request->send(200, "application/json", "{\"steptime\":" + Val + "}");
-            Logger.Write("Web SET " + request->url() + " - Right-StepTime: " + Val);
-
-            volatile uint16_t tmpPos = constrain(Val.toInt(), 1, 65535);
-            BlindR->Step_Ms(tmpPos);
-          }
-        }
-
-        if(Arg == "LSTT") {
-            request->send(200, "text/plain", String(BlindL->State()));
-            //Logger.Write("Web GET " + request->url());
-        }
-
-        if(Arg == "RSTT") {
-            request->send(200, "text/plain", String(BlindR->State()));
-            //Logger.Write("Web GET " + request->url());
-        }
-
-        // Open/close/stop, as used by the dashboard's card buttons - a
-        // motion command rather than a bare target percentage.
-        if(Arg == "LEFTSTATE") {
-          if(Val == "open") BlindL->Open(); else if(Val == "close") BlindL->Close(); else if(Val == "stop") BlindL->Stop();
-          request->send(200, "application/json", "{\"state\":\"" + String(BlindStateName(BlindL->State())) + "\"}");
-          Logger.Write("Web SET " + request->url() + " - Left-State: " + Val);
-        }
-
-        if(Arg == "RIGHTSTATE") {
-          if(Val == "open") BlindR->Open(); else if(Val == "close") BlindR->Close(); else if(Val == "stop") BlindR->Stop();
-          request->send(200, "application/json", "{\"state\":\"" + String(BlindStateName(BlindR->State())) + "\"}");
-          Logger.Write("Web SET " + request->url() + " - Right-State: " + Val);
-        }
-
+      if(item->Class() == component::Classes::Relay) {
+        entry["address"] = item->Address();
+        entry["state"] = static_cast<const relay&>(*item).State();
+      } else if(item->Class() == component::Classes::Button) {
+        entry["address"] = item->Address();
+        entry["pressed"] = static_cast<const button&>(*item).IsPressed();
+      } else if(item->Class() == component::Classes::Thermometer) {
+        const thermometer &sensor = static_cast<const thermometer&>(*item);
+        entry["address"] = item->Address();
+        entry["available"] = sensor.Available();
+        if(sensor.Available()) entry["temperature"] = sensor.Temperature();
+        if(sensor.Available() && sensor.HasHumidity()) entry["humidity"] = sensor.Humidity();
+      } else if(item->Class() == component::Classes::Blinds) {
+        const blinds &b = static_cast<const blinds&>(*item);
+        entry["state"] = blinds::StateName(b.State());
+        entry["position"] = b.Position();
+        entry["stepTimeMs"] = b.StepTime();
+        entry["buttonOpenEnabled"] = b.ButtonOpenEnabled();
+        entry["buttonCloseEnabled"] = b.ButtonCloseEnabled();
+        entry["invertButtons"] = b.InvertButtons();
       }
     }
+
+    AsyncResponseStream *response = request->beginResponseStream("application/json");
+    serializeJson(doc, *response);
+    request->send(response);
+  });
+
+  Webserver->on("/api/components", HTTP_POST, [](AsyncWebServerRequest *request) {
+    WebSession *session = AuthenticatedSession(request);
+    if(!session || !session->Admin) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
+
+    String idText, property, value;
+    for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
+      const AsyncWebParameter *p = request->getParam(i);
+      if(p->name() == "id") idText = p->value();
+      if(p->name() == "property") property = p->value();
+      if(p->name() == "value") value = p->value();
+    }
+
+    if(idText.length() == 0 || property.length() == 0) {
+      request->send(400, "application/json", "{\"error\":\"missing id/property\"}");
+      return;
+    }
+
+    int16_t id = (int16_t)idText.toInt();
+    String error;
+    bool ok = Settings.SetComponentProperty(id, property, value, error);
+    Logger.Write("Web POST " + request->url() + " - component #" + String(id) + "." + property + "=" + value + " " + String(ok ? "accepted" : "rejected (" + error + ")") + " by " + session->Username);
+
+    if(!ok) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
+    request->send(200, "application/json", "{\"success\":true}");
   });
 
   // Everything below is session/admin gated (like about.html), replacing
@@ -702,18 +714,6 @@ void setup() {
     network["Fallback AP Retention"] = Settings.Network_FallbackAPRetention();
     network["HTTP Port"] = Settings.Network_HTTP_Port();
 
-    JsonObject blinds = doc["Blinds"].to<JsonObject>();
-    blinds["Left Name"] = Settings.BlindL_Name();
-    blinds["Left Step Time"] = Settings.BlindL_StepTime();
-    blinds["Left Button Open"] = Settings.BlindL_ButtonOpen();
-    blinds["Left Button Close"] = Settings.BlindL_ButtonClose();
-    blinds["Left Invert Buttons"] = Settings.BlindL_InvertButtons();
-    blinds["Right Name"] = Settings.BlindR_Name();
-    blinds["Right Step Time"] = Settings.BlindR_StepTime();
-    blinds["Right Button Open"] = Settings.BlindR_ButtonOpen();
-    blinds["Right Button Close"] = Settings.BlindR_ButtonClose();
-    blinds["Right Invert Buttons"] = Settings.BlindR_InvertButtons();
-
     JsonObject log = doc["Log"].to<JsonObject>();
     log["Endpoint"] = Settings.Log_Endpoint();
     log["Level"] = Settings.Log_Level();
@@ -805,39 +805,6 @@ void setup() {
       Settings.Network_FallbackAPRetention(FallbackRetention);
       Settings.Save();
       restart = true;
-    } else if(section == "Blinds") {
-      String LeftName(Settings.BlindL_Name()), RightName(Settings.BlindR_Name());
-      uint16_t LeftStepTime(Settings.BlindL_StepTime()), RightStepTime(Settings.BlindR_StepTime());
-      bool LeftButtonOpen(Settings.BlindL_ButtonOpen()), LeftButtonClose(Settings.BlindL_ButtonClose()), LeftInvert(Settings.BlindL_InvertButtons());
-      bool RightButtonOpen(Settings.BlindR_ButtonOpen()), RightButtonClose(Settings.BlindR_ButtonClose()), RightInvert(Settings.BlindR_InvertButtons());
-
-      for(uint8_t i = 0; i < (uint8_t)request->args(); i++) {
-        const AsyncWebParameter *p = request->getParam(i);
-        String n = p->name(), v = p->value();
-        if(n == "Left Name") LeftName = v;
-        if(n == "Left Step Time") LeftStepTime = v.toInt();
-        if(n == "Left Button Open") LeftButtonOpen = (v == "true");
-        if(n == "Left Button Close") LeftButtonClose = (v == "true");
-        if(n == "Left Invert Buttons") LeftInvert = (v == "true");
-        if(n == "Right Name") RightName = v;
-        if(n == "Right Step Time") RightStepTime = v.toInt();
-        if(n == "Right Button Open") RightButtonOpen = (v == "true");
-        if(n == "Right Button Close") RightButtonClose = (v == "true");
-        if(n == "Right Invert Buttons") RightInvert = (v == "true");
-      }
-
-      Settings.BlindL_Name(LeftName); BlindL->Name = Settings.BlindL_Name();
-      Settings.BlindL_StepTime(LeftStepTime); BlindL->Step_Ms(LeftStepTime);
-      Settings.BlindL_ButtonOpen(LeftButtonOpen); BlindL->ButtonOpenEnabled(LeftButtonOpen);
-      Settings.BlindL_ButtonClose(LeftButtonClose); BlindL->ButtonCloseEnabled(LeftButtonClose);
-      Settings.BlindL_InvertButtons(LeftInvert); BlindL->InvertButtons(LeftInvert);
-      Settings.BlindR_Name(RightName); BlindR->Name = Settings.BlindR_Name();
-      Settings.BlindR_StepTime(RightStepTime); BlindR->Step_Ms(RightStepTime);
-      Settings.BlindR_ButtonOpen(RightButtonOpen); BlindR->ButtonOpenEnabled(RightButtonOpen);
-      Settings.BlindR_ButtonClose(RightButtonClose); BlindR->ButtonCloseEnabled(RightButtonClose);
-      Settings.BlindR_InvertButtons(RightInvert); BlindR->InvertButtons(RightInvert);
-      Settings.Save();
-      restart = false;
     } else if(section == "Log") {
       uint8_t Endpoint(Settings.Log_Endpoint());
       uint8_t Level(Settings.Log_Level());
@@ -1044,6 +1011,11 @@ void setup() {
 
     LittleFS.remove(CONFIG_FILE_NAME);
     LittleFS.rename(CONFIG_IMPORT_FILE_NAME, CONFIG_FILE_NAME);
+
+    // The imported catalog becomes the seed of truth again - stale runtime
+    // state (keyed by component ID) from before the import could otherwise
+    // silently override it on the next boot.
+    LittleFS.remove(STATE_FILE_NAME);
 
     request->send(200, "application/json", "{\"ok\":true}");
     Logger.Write("Web POST " + request->url() + " - Config imported (" + session->Username + ")");

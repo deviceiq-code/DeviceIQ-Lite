@@ -38,7 +38,7 @@
         <header class="app-header">
             <div class="app-header-title">
                 <h1>Setup</h1>
-                <p>Network, blinds, and log configuration</p>
+                <p>Network, components, and log configuration</p>
             </div>
             <div class="app-header-actions">
                 <span class="hostname-chip" id="topbar-hostname"></span>
@@ -111,32 +111,6 @@
                     title: "Web Server",
                     fields: [
                         { key: "HTTP Port", label: "HTTP Port", desc: "TCP port this web interface listens on.", type: "number", min: 1, max: 65535 }
-                    ]
-                }
-            ]
-        },
-        {
-            id: "Blinds", title: "Blinds",
-            desc: "Left and right blind configuration.",
-            groups: [
-                {
-                    title: "Left Blind",
-                    fields: [
-                        { key: "Left Name", label: "Name", type: "text" },
-                        { key: "Left Step Time", label: "Step Time", desc: "Milliseconds the motor runs per 1% of position change.", type: "number", min: 1, max: 65535 },
-                        { key: "Left Button Open", label: "Open Button Enabled", type: "bool" },
-                        { key: "Left Button Close", label: "Close Button Enabled", type: "bool" },
-                        { key: "Left Invert Buttons", label: "Invert Buttons", type: "bool" }
-                    ]
-                },
-                {
-                    title: "Right Blind",
-                    fields: [
-                        { key: "Right Name", label: "Name", type: "text" },
-                        { key: "Right Step Time", label: "Step Time", desc: "Milliseconds the motor runs per 1% of position change.", type: "number", min: 1, max: 65535 },
-                        { key: "Right Button Open", label: "Open Button Enabled", type: "bool" },
-                        { key: "Right Button Close", label: "Close Button Enabled", type: "bool" },
-                        { key: "Right Invert Buttons", label: "Invert Buttons", type: "bool" }
                     ]
                 }
             ]
@@ -240,7 +214,7 @@
                 { key: "Port", label: "Port", desc: "MQTT broker port.", type: "number", min: 1, max: 65535 },
                 { key: "User", label: "User", desc: "MQTT username. Leave empty for anonymous access.", type: "text" },
                 { key: "Password", label: "Password", desc: "MQTT password.", type: "text" },
-                { key: "Discovery Enabled", label: "Discovery Enabled", desc: "Publish Home Assistant MQTT discovery messages for both blinds.", type: "bool" },
+                { key: "Discovery Enabled", label: "Discovery Enabled", desc: "Publish Home Assistant MQTT discovery messages for every blind.", type: "bool" },
                 { key: "Discovery Prefix", label: "Discovery Prefix", desc: "Topic prefix Home Assistant listens on for discovery.", type: "text" }
             ]
         },
@@ -258,7 +232,7 @@
 
                 const note = document.createElement("p");
                 note.className = "group-desc";
-                note.textContent = "Using the token and port above. GET or POST both work. id 1 is the left blind, 2 the right one.";
+                note.textContent = "Using the token and port above. GET or POST both work. The id is each blind's component ID, shown on the Components tab.";
                 card.appendChild(note);
 
                 const list = document.createElement("div");
@@ -299,13 +273,13 @@
                     const setBase = "http://" + window.location.hostname + ":" + port + "/component/set?token=" + encodeURIComponent(token);
                     const getBase = "http://" + window.location.hostname + ":" + port + "/component/get?token=" + encodeURIComponent(token);
 
-                    list.appendChild(urlRow("Both blinds - Get state", getBase));
-                    [["1", "Left"], ["2", "Right"]].forEach(function (pair) {
-                        list.appendChild(urlRow(pair[1] + " - Get state", getBase + "&id=" + pair[0]));
-                        list.appendChild(urlRow(pair[1] + " - Open", setBase + "&id=" + pair[0] + "&property=state&value=open"));
-                        list.appendChild(urlRow(pair[1] + " - Close", setBase + "&id=" + pair[0] + "&property=state&value=close"));
-                        list.appendChild(urlRow(pair[1] + " - Stop", setBase + "&id=" + pair[0] + "&property=state&value=stop"));
-                        list.appendChild(urlRow(pair[1] + " - Set position (0-100)", setBase + "&id=" + pair[0] + "&property=position&value=50"));
+                    list.appendChild(urlRow("Every blind - Get state", getBase));
+                    knownBlinds.forEach(function (item) {
+                        list.appendChild(urlRow(item.name + " - Get state", getBase + "&id=" + item.id));
+                        list.appendChild(urlRow(item.name + " - Open", setBase + "&id=" + item.id + "&property=state&value=open"));
+                        list.appendChild(urlRow(item.name + " - Close", setBase + "&id=" + item.id + "&property=state&value=close"));
+                        list.appendChild(urlRow(item.name + " - Stop", setBase + "&id=" + item.id + "&property=state&value=stop"));
+                        list.appendChild(urlRow(item.name + " - Set position (0-100)", setBase + "&id=" + item.id + "&property=position&value=50"));
                     });
                 }
 
@@ -343,12 +317,17 @@
         }
         TABS.push({ id: section.id, label: section.title });
     });
+    TABS.push({ id: "Components", label: "Components" });
     TABS.push({ id: "Configuration", label: "Configuration" });
 
     const sectionReaders = {};
     let activeTab = TABS[0].id;
     let dirty = false;
     let currentHostname = "";
+
+    // Populated from /api/components before the first render() call, so the
+    // Webhooks tab's URL examples can list every actual blind by name.
+    let knownBlinds = [];
 
     function markDirty() {
         dirty = true;
@@ -621,6 +600,140 @@
         return { row: row, control: control };
     }
 
+    function toggleControl(checked, onChange) {
+        const wrap = document.createElement("label");
+        wrap.className = "toggle";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = checked;
+        input.addEventListener("change", onChange);
+        const track = document.createElement("span");
+        track.className = "track";
+        wrap.appendChild(input);
+        wrap.appendChild(track);
+        return wrap;
+    }
+
+    // Every component property change is saved immediately (there is no
+    // batched "Save changes" for this tab, unlike the field-driven sections
+    // above) - it both applies live and is written back into config.json.
+    function postComponentProperty(item, property, value) {
+        const body = new URLSearchParams();
+        body.set("id", item.id);
+        body.set("property", property);
+        body.set("value", value);
+
+        fetch("/api/components", { method: "POST", body: body })
+            .then(function (response) { return response.json().then(function (data) { return { ok: response.ok, data: data }; }); })
+            .catch(function () { return { ok: false, data: { error: "Unable to reach the device." } }; })
+            .then(function (result) {
+                if (!result.ok) Notifications.show(result.data.error || "Save failed.", { title: item.name + "." + property });
+            });
+    }
+
+    // Backs the Components tab: a read-only-by-default view of every
+    // component installed from config.json's Components object, with a
+    // handful of safe properties (Enabled, and Blinds' Step Time/button
+    // enables/Invert Buttons) editable in place. Adding, removing, or
+    // rewiring components is still done via config.json import, on the
+    // Configuration tab.
+    function renderComponentsPanel(components) {
+        const panel = document.createElement("div");
+        panel.className = "tab-panel";
+        panel.id = "panel-Components";
+
+        const card = document.createElement("div");
+        card.className = "setup-card";
+
+        const header = document.createElement("div");
+        header.className = "panel-header";
+        const title = document.createElement("h2");
+        title.textContent = "Components";
+        const desc = document.createElement("p");
+        desc.textContent = "Every component installed from config.json. Changes here apply immediately. Adding, removing, or rewiring components is done by importing an updated configuration file on the Configuration tab.";
+        header.appendChild(title);
+        header.appendChild(desc);
+        card.appendChild(header);
+
+        if (components.length === 0) {
+            const empty = document.createElement("p");
+            empty.className = "group-desc";
+            empty.textContent = "No components are configured.";
+            card.appendChild(empty);
+        }
+
+        components.forEach(function (item) {
+            card.appendChild(groupTitleEl(item.name + " · " + item.class + " (#" + item.id + ")"));
+
+            const list = document.createElement("div");
+            list.className = "settings-list";
+
+            const enabledRow = settingsRow("Enabled", null);
+            enabledRow.control.appendChild(toggleControl(item.enabled, function (event) {
+                postComponentProperty(item, "Enabled", event.target.checked ? "true" : "false");
+            }));
+            list.appendChild(enabledRow.row);
+
+            if (item.class === "Blinds") {
+                const stateRow = settingsRow("State", "Position " + item.position + "%, " + item.state + ".");
+                list.appendChild(stateRow.row);
+
+                const stepRow = settingsRow("Step Time", "Milliseconds the motor runs per 1% of position change.");
+                const stepInput = document.createElement("input");
+                stepInput.type = "number";
+                stepInput.min = 1;
+                stepInput.max = 65535;
+                stepInput.value = item.stepTimeMs;
+                stepInput.addEventListener("change", function () { postComponentProperty(item, "StepTimeMs", stepInput.value); });
+                stepRow.control.appendChild(stepInput);
+                list.appendChild(stepRow.row);
+
+                const openRow = settingsRow("Open Button Enabled", null);
+                openRow.control.appendChild(toggleControl(item.buttonOpenEnabled, function (event) {
+                    postComponentProperty(item, "ButtonOpenEnabled", event.target.checked ? "true" : "false");
+                }));
+                list.appendChild(openRow.row);
+
+                const closeRow = settingsRow("Close Button Enabled", null);
+                closeRow.control.appendChild(toggleControl(item.buttonCloseEnabled, function (event) {
+                    postComponentProperty(item, "ButtonCloseEnabled", event.target.checked ? "true" : "false");
+                }));
+                list.appendChild(closeRow.row);
+
+                const invertRow = settingsRow("Invert Buttons", "Swaps which physical button opens and which closes.");
+                invertRow.control.appendChild(toggleControl(item.invertButtons, function (event) {
+                    postComponentProperty(item, "InvertButtons", event.target.checked ? "true" : "false");
+                }));
+                list.appendChild(invertRow.row);
+            } else if (item.class === "Relay") {
+                const stateRow = settingsRow("State", "GPIO " + item.address + ".");
+                const value = document.createElement("span");
+                value.textContent = item.state ? "On" : "Off";
+                stateRow.control.appendChild(value);
+                list.appendChild(stateRow.row);
+            } else if (item.class === "Button") {
+                const stateRow = settingsRow("State", "GPIO " + item.address + ".");
+                const value = document.createElement("span");
+                value.textContent = item.pressed ? "Pressed" : "Released";
+                stateRow.control.appendChild(value);
+                list.appendChild(stateRow.row);
+            } else if (item.class === "Thermometer") {
+                const stateRow = settingsRow("Reading", "GPIO " + item.address + ".");
+                const value = document.createElement("span");
+                value.textContent = item.available
+                    ? item.temperature.toFixed(1) + "°C" + (item.humidity !== undefined ? ", " + item.humidity.toFixed(1) + "% RH" : "")
+                    : "unavailable";
+                stateRow.control.appendChild(value);
+                list.appendChild(stateRow.row);
+            }
+
+            card.appendChild(list);
+        });
+
+        panel.appendChild(card);
+        return panel;
+    }
+
     function renderConfigurationPanel() {
         const panel = document.createElement("div");
         panel.className = "tab-panel";
@@ -780,7 +893,7 @@
         });
     }
 
-    function render(settings) {
+    function render(settings, components) {
         const tabsContainer = document.getElementById("tabs");
         const panelsContainer = document.getElementById("panels");
         tabsContainer.innerHTML = "";
@@ -803,6 +916,7 @@
         COMBINED_TABS.forEach(function (combo) {
             panelsContainer.appendChild(renderCombinedPanel(combo, settings));
         });
+        panelsContainer.appendChild(renderComponentsPanel(components));
         panelsContainer.appendChild(renderConfigurationPanel());
 
         selectTab(activeTab);
@@ -885,10 +999,15 @@
         document.title = session.productFamily + " [" + session.hostname + "] - Setup";
         document.getElementById("sidebar-product").textContent = session.productFamily + " " + session.productName;
         document.getElementById("sidebar-version").textContent = "v" + session.softwareVersion;
-        return fetch("/api/settings");
-    }).then(function (response) { return response.json(); })
-        .then(function (settings) { render(settings); })
-        .catch(function () {});
+        return Promise.all([fetch("/api/settings"), fetch("/api/components")]);
+    }).then(function (responses) {
+        return Promise.all(responses.map(function (response) { return response.json(); }));
+    }).then(function (results) {
+        const settings = results[0];
+        const components = results[1].components || [];
+        knownBlinds = components.filter(function (item) { return item.class === "Blinds"; });
+        render(settings, components);
+    }).catch(function () {});
 
     document.getElementById("logout-button").addEventListener("click", function () {
         fetch("/api/logout", { method: "POST" }).finally(function () { window.location.replace("/"); });
