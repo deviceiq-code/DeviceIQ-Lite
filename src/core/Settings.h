@@ -27,36 +27,15 @@ const char* const STATE_FILE_NAME = "/state.json";
 // rather than user-configurable).
 const uint32_t STATE_SAVE_INTERVAL_MS = 20000;
 
-// Blind-specific values recovered from a pre-Components config.json during
-// migration, used only once to seed the default Components object - see
-// settings::EnsureDefaultComponents() in ComponentConfig.cpp. Not part of
-// the live settings state.
-struct LegacyBlindsSeed {
-    String LeftName = Defaults.Components.Blinds.LeftName;
-    String RightName = Defaults.Components.Blinds.RightName;
-    uint16_t LeftStepTime = Defaults.Components.Blinds.StepTimeMs;
-    uint16_t RightStepTime = Defaults.Components.Blinds.StepTimeMs;
-    bool LeftButtonOpen = Defaults.Components.Blinds.ButtonOpen;
-    bool LeftButtonClose = Defaults.Components.Blinds.ButtonClose;
-    bool LeftInvertButtons = Defaults.Components.Blinds.InvertButtons;
-    bool RightButtonOpen = Defaults.Components.Blinds.ButtonOpen;
-    bool RightButtonClose = Defaults.Components.Blinds.ButtonClose;
-    bool RightInvertButtons = Defaults.Components.Blinds.InvertButtons;
-};
-
 class settings {
     private:
-        // Writes the default Components object (matching Lite's fixed PCB
-        // wiring - two Blinds, pins as in main.cpp's old hardcoded
-        // constructions) into ConfigFileName, unless a valid Components
-        // object is already present. Implemented in ComponentConfig.cpp.
-        bool EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed);
-
-        // Wipes the Components object down to empty (keeping
-        // ComponentSchemaVersion current) - used by FactoryReset(), which
-        // unlike a fresh boot must not repopulate Lite's fixed-wiring
-        // defaults. Implemented in ComponentConfig.cpp.
-        bool ClearComponents(const String& ConfigFileName);
+        // Resets the Components object to empty (keeping ComponentSchemaVersion
+        // current). Force=true always resets (FactoryReset(), or a fresh/wiped
+        // filesystem with no config.json at all); Force=false only resets an
+        // outdated or missing Components object, leaving an already-valid
+        // catalog from a real config.json untouched. Implemented in
+        // ComponentConfig.cpp.
+        bool ClearComponents(const String& ConfigFileName, bool Force = true);
 
         void LoadDefaults();
         // Adds DeviceIQ's second default account (non-admin "user"). Called

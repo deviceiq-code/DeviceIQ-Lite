@@ -29,16 +29,6 @@ struct defaults {
         const uint16_t FallbackAPRetention = 300;
         const uint16_t HTTPPort = 80;
     } Network;
-    struct components {
-        struct blinds {
-            const uint16_t StepTimeMs = 250;
-            const bool ButtonOpen = true;
-            const bool ButtonClose = true;
-            const bool InvertButtons = false;
-            const char* LeftName = "Left";
-            const char* RightName = "Right";
-        } Blinds;
-    } Components;
     struct users {
         struct admin {
             const char* Username = "admin";
@@ -65,6 +55,10 @@ struct defaults {
         const bool NTPEnabled = true;
         const char* NTPServer = "pool.ntp.org";
         const int8_t TimeZone = -3; // UTC offset in hours.
+        // Same value DeviceIQ seeds the clock with before NTP ever runs -
+        // keeps a plausible date (rather than 1970) if NTP is disabled or
+        // unreachable, e.g. while running on the fallback AP.
+        const uint32_t InitialTimeAndDate = 1708136755;
     } General;
     struct mqtt {
         const bool Enabled = false;

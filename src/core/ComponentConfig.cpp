@@ -591,7 +591,7 @@ bool settings::SaveComponentsState(const String& StateFileName) {
     return ok;
 }
 
-bool settings::ClearComponents(const String& ConfigFileName) {
+bool settings::ClearComponents(const String& ConfigFileName, bool Force) {
     JsonDocument doc;
     if(LittleFS.exists(ConfigFileName)) {
         File file = LittleFS.open(ConfigFileName, "r");
@@ -599,6 +599,14 @@ bool settings::ClearComponents(const String& ConfigFileName) {
             deserializeJson(doc, file);
             file.close();
         }
+    }
+
+    // Force=false (used when loading an existing config.json) leaves an
+    // already-valid Components catalog untouched - only a missing/outdated
+    // one gets reset to empty. Force=true (FactoryReset(), or no config.json
+    // at all) always resets to empty regardless of what's there.
+    if(!Force && (doc["ComponentSchemaVersion"] | 0) == ComponentSchemaVersion && doc["Components"].is<JsonObjectConst>()) {
+        return true;
     }
 
     doc["ComponentSchemaVersion"] = ComponentSchemaVersion;
@@ -611,87 +619,13 @@ bool settings::ClearComponents(const String& ConfigFileName) {
     return ok;
 }
 
-bool settings::EnsureDefaultComponents(const String& ConfigFileName, const LegacyBlindsSeed& Seed) {
-    JsonDocument doc;
-    if(LittleFS.exists(ConfigFileName)) {
-        File file = LittleFS.open(ConfigFileName, "r");
-        if(file) {
-            deserializeJson(doc, file);
-            file.close();
-        }
-    }
-
-    bool alreadyValid = (doc["ComponentSchemaVersion"] | 0) == ComponentSchemaVersion && doc["Components"].is<JsonObjectConst>();
-    if(alreadyValid) return true;
-
-    doc["ComponentSchemaVersion"] = ComponentSchemaVersion;
-    JsonObject components = doc["Components"].to<JsonObject>();
-
-    // Reproduces Lite's fixed PCB wiring: two Blinds, matching the pins
-    // main.cpp used to hardcode directly.
-    auto addRelay = [&](int16_t id, const char* name, uint8_t address) {
-        JsonObject item = components[String(id)].to<JsonObject>();
-        JsonObject setup = item["Setup"].to<JsonObject>();
-        setup["Name"] = name;
-        setup["Class"] = "Relay";
-        setup["Address"] = address;
-        JsonObject properties = item["Properties"].to<JsonObject>();
-        properties["Enabled"] = true;
-        properties["State"] = false;
-    };
-
-    auto addButton = [&](int16_t id, const char* name, uint8_t address) {
-        JsonObject item = components[String(id)].to<JsonObject>();
-        JsonObject setup = item["Setup"].to<JsonObject>();
-        setup["Name"] = name;
-        setup["Class"] = "Button";
-        setup["Address"] = address;
-        JsonObject properties = item["Properties"].to<JsonObject>();
-        properties["Enabled"] = true;
-    };
-
-    auto addBlinds = [&](int16_t id, const String& name, int16_t relayOpen, int16_t relayClose, int16_t buttonOpen, int16_t buttonClose,
-                          uint16_t stepTimeMs, bool buttonOpenEnabled, bool buttonCloseEnabled, bool invertButtons) {
-        JsonObject item = components[String(id)].to<JsonObject>();
-        JsonObject setup = item["Setup"].to<JsonObject>();
-        setup["Name"] = name;
-        setup["Class"] = "Blinds";
-        setup["RelayOpen"] = relayOpen;
-        setup["RelayClose"] = relayClose;
-        setup["ButtonOpen"] = buttonOpen;
-        setup["ButtonClose"] = buttonClose;
-        setup["StepTimeMs"] = stepTimeMs;
-        JsonObject properties = item["Properties"].to<JsonObject>();
-        properties["Enabled"] = true;
-        properties["Position"] = 0;
-        properties["ButtonOpenEnabled"] = buttonOpenEnabled;
-        properties["ButtonCloseEnabled"] = buttonCloseEnabled;
-        properties["InvertButtons"] = invertButtons;
-    };
-
-    addRelay(1, "LeftRelayOpen", 14);
-    addRelay(2, "LeftRelayClose", 12);
-    addButton(3, "LeftButtonOpen", 5);
-    addButton(4, "LeftButtonClose", 4);
-    addBlinds(5, Seed.LeftName, 1, 2, 3, 4, Seed.LeftStepTime, Seed.LeftButtonOpen, Seed.LeftButtonClose, Seed.LeftInvertButtons);
-
-    addRelay(6, "RightRelayOpen", 13);
-    addRelay(7, "RightRelayClose", 10);
-    addButton(8, "RightButtonOpen", 0);
-    addButton(9, "RightButtonClose", 2);
-    addBlinds(10, Seed.RightName, 6, 7, 8, 9, Seed.RightStepTime, Seed.RightButtonOpen, Seed.RightButtonClose, Seed.RightInvertButtons);
-
-    File file = LittleFS.open(ConfigFileName, "w");
-    if(!file) return false;
-    bool ok = serializeJsonPretty(doc, file) > 0;
-    file.close();
-    return ok;
-}
-
 namespace {
+    // Matches DeviceIQ's own component::ParseBoolean exactly - "on"/"off"
+    // accepted alongside "true"/"false"/"1"/"0", so a Relay's "State"
+    // property takes the same values from the Dashboard, Webhooks, and MQTT.
     bool ParseConfigBool(const String& value, bool& result) {
-        if(value.equalsIgnoreCase("true") || value == "1") { result = true; return true; }
-        if(value.equalsIgnoreCase("false") || value == "0") { result = false; return true; }
+        if(value.equalsIgnoreCase("true") || value.equalsIgnoreCase("on") || value == "1") { result = true; return true; }
+        if(value.equalsIgnoreCase("false") || value.equalsIgnoreCase("off") || value == "0") { result = false; return true; }
         return false;
     }
 }
@@ -717,6 +651,12 @@ bool settings::SetComponentProperty(int16_t ID, const String& Property, const St
         else if(Value.equalsIgnoreCase("close")) target_blinds.Close();
         else if(Value.equalsIgnoreCase("stop")) target_blinds.Stop();
         else { Error = "invalid value"; return false; }
+        return true;
+    }
+    if(target->Class() == component::Classes::Blinds && Property.equalsIgnoreCase("Position")) {
+        long position = Value.toInt();
+        if(position < 0 || position > blinds::MAX_POSITION) { Error = "invalid value"; return false; }
+        static_cast<blinds&>(*target).SetPosition((uint8_t)position);
         return true;
     }
 

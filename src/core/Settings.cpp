@@ -59,13 +59,16 @@ void settings::AddDefaultUserAccount() {
 
 bool settings::Load(const String& ConfigFileName) {
     LoadDefaults();
-    LegacyBlindsSeed BlindsSeed;
 
     if(!LittleFS.exists(ConfigFileName)) {
+        // No config.json at all - a brand new device, or one whose
+        // filesystem partition was just reflashed (uploadfs replaces the
+        // whole partition; data/ ships no config.json). Same "blank slate"
+        // as FactoryReset(): no components created by default.
         Users.Add(Defaults.Users.Admin.Username, Defaults.Users.Admin.Password, true);
         AddDefaultUserAccount();
         Save(ConfigFileName);
-        EnsureDefaultComponents(ConfigFileName, BlindsSeed);
+        ClearComponents(ConfigFileName);
         return false;
     }
 
@@ -98,23 +101,6 @@ bool settings::Load(const String& ConfigFileName) {
     mNetwork_FallbackAPSSID = String((const char*)(network["Fallback AP SSID"] | Defaults.Network.FallbackAPSSID));
     mNetwork_FallbackAPPassword = String((const char*)(network["Fallback AP Password"] | Defaults.Network.FallbackAPPassword));
     mNetwork_FallbackAPRetention = network["Fallback AP Retention"] | Defaults.Network.FallbackAPRetention;
-
-    // Only relevant on a config.json saved by a pre-Components firmware
-    // version - used solely to seed the default Components object below,
-    // not stored as live settings state anymore.
-    JsonObjectConst blindL = root["Blinds"]["Left"];
-    BlindsSeed.LeftName = String((const char*)(blindL["Name"] | Defaults.Components.Blinds.LeftName));
-    BlindsSeed.LeftStepTime = blindL["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
-    BlindsSeed.LeftButtonOpen = blindL["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
-    BlindsSeed.LeftButtonClose = blindL["Button Close"] | Defaults.Components.Blinds.ButtonClose;
-    BlindsSeed.LeftInvertButtons = blindL["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
-
-    JsonObjectConst blindR = root["Blinds"]["Right"];
-    BlindsSeed.RightName = String((const char*)(blindR["Name"] | Defaults.Components.Blinds.RightName));
-    BlindsSeed.RightStepTime = blindR["Step Time"] | Defaults.Components.Blinds.StepTimeMs;
-    BlindsSeed.RightButtonOpen = blindR["Button Open"] | Defaults.Components.Blinds.ButtonOpen;
-    BlindsSeed.RightButtonClose = blindR["Button Close"] | Defaults.Components.Blinds.ButtonClose;
-    BlindsSeed.RightInvertButtons = blindR["Invert Buttons"] | Defaults.Components.Blinds.InvertButtons;
 
     // Kept only for the legacy-plaintext-admin migration below; the
     // Security_Method concept it used to also carry (Auth/WebUI/JSON/
@@ -186,7 +172,9 @@ bool settings::Load(const String& ConfigFileName) {
     mWebhooks_Token = String((const char*)(webhooks["Token"] | Defaults.Webhooks.Token));
     mWebhooks_Port = webhooks["Port"] | Defaults.Webhooks.Port;
 
-    EnsureDefaultComponents(ConfigFileName, BlindsSeed);
+    // Leaves an already-valid Components catalog alone; only resets it to
+    // empty if missing or from a pre-multi-component schema version.
+    ClearComponents(ConfigFileName, false);
 
     return true;
 }

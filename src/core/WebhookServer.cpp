@@ -5,23 +5,35 @@
 #include "core/Settings.h"
 #include "core/Logger.h"
 #include "components/ComponentManager.h"
+#include "components/Relay.h"
+#include "components/Button.h"
+#include "components/Thermometer.h"
 #include "components/Blinds.h"
 
 namespace {
-    void AppendBlindJson(JsonObject entry, const blinds& target) {
-        entry["id"] = target.ID();
-        entry["name"] = target.Name();
-        entry["class"] = "Blinds";
-        entry["enabled"] = target.Enabled();
-        entry["state"] = blinds::StateName(target.State());
-        entry["position"] = target.Position();
-        entry["targetPosition"] = target.TargetPosition();
-    }
+    // Mirrors main.cpp's "/api/components" GET per-class field logic, so a
+    // Webhooks client sees exactly the same shape the Dashboard does.
+    void AppendComponentJson(JsonObject entry, const component& item) {
+        entry["id"] = item.ID();
+        entry["name"] = item.Name();
+        entry["class"] = component::ClassName(item.Class());
+        entry["enabled"] = item.Enabled();
 
-    blinds* BlindByID(int id) {
-        component* found = Components.FindByID((int16_t)id);
-        if(found == nullptr || found->Class() != component::Classes::Blinds) return nullptr;
-        return static_cast<blinds*>(found);
+        if(item.Class() == component::Classes::Relay) {
+            entry["state"] = static_cast<const relay&>(item).State();
+        } else if(item.Class() == component::Classes::Button) {
+            entry["pressed"] = static_cast<const button&>(item).IsPressed();
+        } else if(item.Class() == component::Classes::Thermometer) {
+            const thermometer& sensor = static_cast<const thermometer&>(item);
+            entry["available"] = sensor.Available();
+            if(sensor.Available()) entry["temperature"] = sensor.Temperature();
+            if(sensor.Available() && sensor.HasHumidity()) entry["humidity"] = sensor.Humidity();
+        } else if(item.Class() == component::Classes::Blinds) {
+            const blinds& target = static_cast<const blinds&>(item);
+            entry["state"] = blinds::StateName(target.State());
+            entry["position"] = target.Position();
+            entry["targetPosition"] = target.TargetPosition();
+        }
     }
 
     String ParamOr(AsyncWebServerRequest *request, const char* name, const String& fallback = "") {
@@ -39,7 +51,8 @@ bool webhookserver::TokenValid(const String& provided) {
 }
 
 void webhookserver::Start() {
-    if(!Settings.Webhooks_Enabled() || pServer != nullptr) return;
+    if(pServer != nullptr) return;
+    if(!Settings.Webhooks_Enabled()) { Logger.Write("Webhooks: Disabled"); return; }
 
     pServer = new AsyncWebServer(Settings.Webhooks_Port());
     pServer->on("/component/get", HTTP_GET, HandleGet);
@@ -62,20 +75,18 @@ void webhookserver::HandleGet(AsyncWebServerRequest *request) {
     JsonDocument doc;
 
     if(!request->hasParam("id")) {
-        // No id: report every registered blind, mirroring the web UI's
-        // /api/blinds.
+        // No id: report every public component, mirroring the web UI's
+        // /api/components.
         JsonArray items = doc["components"].to<JsonArray>();
         for(size_t i = 0; i < Components.Count(); i++) {
             component* item = Components.At(i);
-            if(item != nullptr && item->IsPublic() && item->Class() == component::Classes::Blinds) {
-                AppendBlindJson(items.add<JsonObject>(), static_cast<const blinds&>(*item));
-            }
+            if(item != nullptr && item->IsPublic()) AppendComponentJson(items.add<JsonObject>(), *item);
         }
     } else {
         int id = ParamOr(request, "id").toInt();
-        blinds* target = BlindByID(id);
-        if(target == nullptr) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
-        AppendBlindJson(doc.to<JsonObject>(), *target);
+        component* target = Components.FindByID((int16_t)id);
+        if(target == nullptr || !target->IsPublic()) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
+        AppendComponentJson(doc.to<JsonObject>(), *target);
     }
 
     AsyncResponseStream *response = request->beginResponseStream("application/json");
@@ -97,33 +108,23 @@ void webhookserver::HandleSet(AsyncWebServerRequest *request) {
         return;
     }
 
-    int id = ParamOr(request, "id").toInt();
+    int16_t id = (int16_t)ParamOr(request, "id").toInt();
     String property = ParamOr(request, "property");
     String value = ParamOr(request, "value");
 
-    blinds* target = BlindByID(id);
-    if(target == nullptr) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
+    component* target = Components.FindByID(id);
+    if(target == nullptr || !target->IsPublic()) { request->send(404, "application/json", "{\"error\":\"component not found\"}"); return; }
 
-    bool accepted = true;
-    if(property.equalsIgnoreCase("state")) {
-        if(value.equalsIgnoreCase("open")) target->Open();
-        else if(value.equalsIgnoreCase("close")) target->Close();
-        else if(value.equalsIgnoreCase("stop")) target->Stop();
-        else accepted = false;
-    } else if(property.equalsIgnoreCase("position")) {
-        int position = value.toInt();
-        if(position < 0 || position > blinds::MAX_POSITION) accepted = false;
-        else target->SetPosition((uint8_t)position);
-    } else {
-        accepted = false;
-    }
+    String targetName = target->Name();
+    String error;
+    bool accepted = Settings.SetComponentProperty(id, property, value, error);
 
     Logger.Write(
-        "Webhooks: component set " + String(accepted ? "accepted" : "rejected") + " from " + remoteIP.toString() + ": " + target->Name() + "." + property + "=" + value,
+        "Webhooks: component set " + String(accepted ? "accepted" : "rejected") + " from " + remoteIP.toString() + ": " + targetName + "." + property + "=" + value,
         accepted ? logger::Information : logger::Warning
     );
 
-    if(!accepted) { request->send(422, "application/json", "{\"error\":\"invalid property or value\"}"); return; }
+    if(!accepted) { request->send(422, "application/json", "{\"error\":\"" + error + "\"}"); return; }
     request->send(200, "application/json", "{\"success\":true}");
 }
 

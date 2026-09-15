@@ -21,7 +21,7 @@ mqttclient* mqttclient::pActiveInstance = nullptr;
 
 void mqttclient::Start() {
     pEnabled = Settings.MQTT_Enabled();
-    if(!pEnabled) return;
+    if(!pEnabled) { Logger.Write("MQTT disabled"); return; }
 
     pBroker = Settings.MQTT_Broker();
     pPort = Settings.MQTT_Port();
@@ -94,8 +94,8 @@ bool mqttclient::Connect() {
 
     // A fresh connection means Home Assistant (or a broker with no
     // retained messages) has nothing to show yet - republish regardless of
-    // whether the position/state actually changed since last time.
-    for(auto& entry : pBlindCache) entry.published = false;
+    // whether the state actually changed since last time.
+    for(auto& entry : pStateCache) entry.published = false;
     PublishStateIfChanged();
 
     return true;
@@ -123,57 +123,78 @@ void mqttclient::HandleMessage(const String& topic, const uint8_t* payload, size
     if(!direction.equalsIgnoreCase("Set") || property.length() == 0) return;
 
     component* found = Components.FindByName(componentName);
-    if(found == nullptr || !found->IsPublic() || found->Class() != component::Classes::Blinds) {
+    if(found == nullptr || !found->IsPublic()) {
         Logger.Write("MQTT target not found: " + componentName, logger::Warning);
         return;
     }
-    blinds* target = static_cast<blinds*>(found);
 
     String value;
     value.reserve(length);
     for(size_t i = 0; i < length; i++) value += (char)payload[i];
     value.trim();
 
-    if(property.equalsIgnoreCase("state")) {
-        if(value.equalsIgnoreCase("open")) target->Open();
-        else if(value.equalsIgnoreCase("close")) target->Close();
-        else if(value.equalsIgnoreCase("stop")) target->Stop();
-        else Logger.Write("MQTT command rejected: " + componentName + ".state=" + value, logger::Warning);
-    } else if(property.equalsIgnoreCase("position")) {
-        int position = value.toInt();
-        if(position < 0 || position > blinds::MAX_POSITION) {
-            Logger.Write("MQTT command rejected: " + componentName + ".position=" + value, logger::Warning);
-        } else {
-            target->SetPosition((uint8_t)position);
-        }
-    } else {
-        Logger.Write("MQTT command rejected: " + componentName + "." + property + " not supported", logger::Warning);
+    // Same property setter the Dashboard and Webhooks use, so a Relay/Blinds
+    // command means the same thing regardless of which of the three sent it.
+    String error;
+    if(!Settings.SetComponentProperty(found->ID(), property, value, error)) {
+        Logger.Write("MQTT command rejected: " + componentName + "." + property + "=" + value + ": " + error, logger::Warning);
     }
 }
 
 void mqttclient::PublishStateIfChanged() {
     for(size_t i = 0; i < Components.Count() && i < ComponentManager::MAX_COMPONENTS; i++) {
         component* item = Components.At(i);
-        if(item == nullptr || !item->IsPublic() || item->Class() != component::Classes::Blinds) continue;
+        if(item == nullptr || !item->IsPublic() || !ValidTopicSegment(item->Name())) continue;
 
-        const blinds& target = static_cast<const blinds&>(*item);
-        BlindPublishState& cache = pBlindCache[i];
-        uint8_t position = target.Position();
-        blinds::Motion state = target.State();
+        PublishState& cache = pStateCache[i];
 
-        if(!cache.published || position != cache.position || state != cache.state) {
-            PublishBlindState(target.Name(), position, BlindMQTTState(state, position));
-            cache.position = position;
-            cache.state = state;
-            cache.published = true;
+        if(item->Class() == component::Classes::Relay) {
+            const relay& target = static_cast<const relay&>(*item);
+            bool state = target.State();
+            if(!cache.published || state != cache.relayState) {
+                Publish(ComponentTopic(target.Name(), "Get", "state"), state ? "on" : "off", true);
+                cache.relayState = state;
+                cache.published = true;
+            }
+        } else if(item->Class() == component::Classes::Button) {
+            const button& target = static_cast<const button&>(*item);
+            bool pressed = target.IsPressed();
+            if(!cache.published || pressed != cache.buttonPressed) {
+                Publish(ComponentTopic(target.Name(), "Get", "state"), pressed ? "pressed" : "released", true);
+                cache.buttonPressed = pressed;
+                cache.published = true;
+            }
+        } else if(item->Class() == component::Classes::Thermometer) {
+            const thermometer& target = static_cast<const thermometer&>(*item);
+            bool available = target.Available();
+            if(!cache.published || available != cache.thermometerAvailable) {
+                Publish(ComponentTopic(target.Name(), "Get", "availability"), available ? "online" : "offline", true);
+                cache.thermometerAvailable = available;
+                cache.published = true;
+            }
+            if(available) {
+                float temperature = target.Temperature();
+                float humidity = target.Humidity();
+                if(temperature != cache.thermometerTemperature || (target.HasHumidity() && humidity != cache.thermometerHumidity)) {
+                    Publish(ComponentTopic(target.Name(), "Get", "temperature"), String(temperature, 2), true);
+                    if(target.HasHumidity()) Publish(ComponentTopic(target.Name(), "Get", "humidity"), String(humidity, 2), true);
+                    cache.thermometerTemperature = temperature;
+                    cache.thermometerHumidity = humidity;
+                }
+            }
+        } else if(item->Class() == component::Classes::Blinds) {
+            const blinds& target = static_cast<const blinds&>(*item);
+            uint8_t position = target.Position();
+            blinds::Motion state = target.State();
+            if(!cache.published || position != cache.blindPosition || state != cache.blindState) {
+                Publish(ComponentTopic(target.Name(), "Get", "state"), BlindMQTTState(state, position), true);
+                Publish(ComponentTopic(target.Name(), "Get", "position"), String(position), true);
+                cache.blindPosition = position;
+                cache.blindState = state;
+                cache.published = true;
+            }
         }
     }
-}
-
-void mqttclient::PublishBlindState(const String& name, uint8_t position, const char* state) {
-    if(!ValidTopicSegment(name)) return;
-    Publish(ComponentTopic(name, "Get", "state"), state, true);
-    Publish(ComponentTopic(name, "Get", "position"), String(position), true);
 }
 
 void mqttclient::PublishDiscovery() {
@@ -181,9 +202,113 @@ void mqttclient::PublishDiscovery() {
 
     for(size_t i = 0; i < Components.Count(); i++) {
         component* item = Components.At(i);
-        if(item == nullptr || !item->IsPublic() || item->Class() != component::Classes::Blinds) continue;
-        const blinds& target = static_cast<const blinds&>(*item);
-        if(ValidTopicSegment(target.Name())) PublishBlindDiscovery(target);
+        if(item == nullptr || !item->IsPublic() || !ValidTopicSegment(item->Name())) continue;
+
+        if(item->Class() == component::Classes::Relay) PublishRelayDiscovery(static_cast<const relay&>(*item));
+        else if(item->Class() == component::Classes::Button) PublishButtonDiscovery(static_cast<const button&>(*item));
+        else if(item->Class() == component::Classes::Thermometer) PublishThermometerDiscovery(static_cast<const thermometer&>(*item));
+        else if(item->Class() == component::Classes::Blinds) PublishBlindDiscovery(static_cast<const blinds&>(*item));
+    }
+}
+
+void mqttclient::AddDiscoveryMetadata(JsonDocument& doc, const String& name, const String& uniqueId, bool includeAvailability) {
+    doc["name"] = name;
+    doc["uniq_id"] = uniqueId;
+    if(includeAvailability) {
+        doc["avty_t"] = AvailabilityTopic();
+        doc["pl_avail"] = "online";
+        doc["pl_not_avail"] = "offline";
+    }
+
+    JsonObject device = doc["dev"].to<JsonObject>();
+    device["ids"] = pDeviceID;
+    device["name"] = pHostname;
+    device["mf"] = Version::ProductFamily;
+    device["mdl"] = Version::ProductName;
+    device["sw"] = Version::Software::Info();
+    device["hw"] = Version::Hardware::Info();
+    device["sn"] = Version::SerialNumber();
+
+    JsonObject origin = doc["o"].to<JsonObject>();
+    origin["name"] = Version::ProductFamily;
+    origin["sw"] = Version::Software::Info();
+}
+
+void mqttclient::PublishRelayDiscovery(const relay& target) {
+    const String& name = target.Name();
+    String unique = UniqueID("relay" + String(target.ID()) + "_switch");
+
+    JsonDocument doc;
+    AddDiscoveryMetadata(doc, name, unique);
+    doc["cmd_t"] = ComponentTopic(name, "Set", "state");
+    doc["stat_t"] = ComponentTopic(name, "Get", "state");
+    doc["pl_on"] = "on";
+    doc["pl_off"] = "off";
+    doc["stat_on"] = "on";
+    doc["stat_off"] = "off";
+
+    String payload;
+    if(serializeJson(doc, payload) > 0) Publish(pDiscoveryPrefix + "/switch/" + unique + "/config", payload, true);
+}
+
+void mqttclient::PublishButtonDiscovery(const button& target) {
+    const String& name = target.Name();
+    String unique = UniqueID("button" + String(target.ID()) + "_state");
+
+    JsonDocument doc;
+    AddDiscoveryMetadata(doc, name, unique);
+    doc["stat_t"] = ComponentTopic(name, "Get", "state");
+    doc["pl_on"] = "pressed";
+    doc["pl_off"] = "released";
+
+    String payload;
+    if(serializeJson(doc, payload) > 0) Publish(pDiscoveryPrefix + "/binary_sensor/" + unique + "/config", payload, true);
+}
+
+void mqttclient::AddThermometerAvailability(JsonDocument& doc, const String& name) {
+    JsonArray availability = doc["avty"].to<JsonArray>();
+    JsonObject device = availability.add<JsonObject>();
+    device["t"] = AvailabilityTopic();
+    device["pl_avail"] = "online";
+    device["pl_not_avail"] = "offline";
+    JsonObject sensor = availability.add<JsonObject>();
+    sensor["t"] = ComponentTopic(name, "Get", "availability");
+    sensor["pl_avail"] = "online";
+    sensor["pl_not_avail"] = "offline";
+    doc["avty_mode"] = "all";
+}
+
+void mqttclient::PublishThermometerDiscovery(const thermometer& target) {
+    const String& name = target.Name();
+
+    String temperatureUnique = UniqueID("thermometer" + String(target.ID()) + "_temperature");
+    JsonDocument temperatureDoc;
+    AddDiscoveryMetadata(temperatureDoc, name + " Temperature", temperatureUnique, false);
+    temperatureDoc["stat_t"] = ComponentTopic(name, "Get", "temperature");
+    temperatureDoc["dev_cla"] = "temperature";
+    temperatureDoc["unit_of_meas"] = "°C";
+    temperatureDoc["stat_cla"] = "measurement";
+    temperatureDoc["sug_dsp_prc"] = 1;
+    AddThermometerAvailability(temperatureDoc, name);
+    String temperaturePayload;
+    if(serializeJson(temperatureDoc, temperaturePayload) > 0) {
+        Publish(pDiscoveryPrefix + "/sensor/" + temperatureUnique + "/config", temperaturePayload, true);
+    }
+
+    if(!target.HasHumidity()) return;
+
+    String humidityUnique = UniqueID("thermometer" + String(target.ID()) + "_humidity");
+    JsonDocument humidityDoc;
+    AddDiscoveryMetadata(humidityDoc, name + " Humidity", humidityUnique, false);
+    humidityDoc["stat_t"] = ComponentTopic(name, "Get", "humidity");
+    humidityDoc["dev_cla"] = "humidity";
+    humidityDoc["unit_of_meas"] = "%";
+    humidityDoc["stat_cla"] = "measurement";
+    humidityDoc["sug_dsp_prc"] = 1;
+    AddThermometerAvailability(humidityDoc, name);
+    String humidityPayload;
+    if(serializeJson(humidityDoc, humidityPayload) > 0) {
+        Publish(pDiscoveryPrefix + "/sensor/" + humidityUnique + "/config", humidityPayload, true);
     }
 }
 
@@ -192,11 +317,7 @@ void mqttclient::PublishBlindDiscovery(const blinds& target) {
     String unique = UniqueID("blind" + String(target.ID()) + "_cover");
 
     JsonDocument doc;
-    doc["name"] = name;
-    doc["uniq_id"] = unique;
-    doc["avty_t"] = AvailabilityTopic();
-    doc["pl_avail"] = "online";
-    doc["pl_not_avail"] = "offline";
+    AddDiscoveryMetadata(doc, name, unique);
     doc["dev_cla"] = "blind";
     doc["cmd_t"] = ComponentTopic(name, "Set", "state");
     doc["stat_t"] = ComponentTopic(name, "Get", "state");
@@ -212,19 +333,6 @@ void mqttclient::PublishBlindDiscovery(const blinds& target) {
     doc["stat_opening"] = "opening";
     doc["stat_closing"] = "closing";
     doc["stat_stopped"] = "stopped";
-
-    JsonObject device = doc["dev"].to<JsonObject>();
-    device["ids"] = pDeviceID;
-    device["name"] = pHostname;
-    device["mf"] = Version::ProductFamily;
-    device["mdl"] = Version::ProductName;
-    device["sw"] = Version::Software::Info();
-    device["hw"] = Version::Hardware::Info();
-    device["sn"] = Version::SerialNumber();
-
-    JsonObject origin = doc["o"].to<JsonObject>();
-    origin["name"] = Version::ProductFamily;
-    origin["sw"] = Version::Software::Info();
 
     String payload;
     if(serializeJson(doc, payload) > 0) Publish(pDiscoveryPrefix + "/cover/" + unique + "/config", payload, true);

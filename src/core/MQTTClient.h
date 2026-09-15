@@ -5,6 +5,9 @@
 #include <PubSubClient.h>
 #include <ESP8266WiFi.h>
 #include "components/ComponentManager.h"
+#include "components/Relay.h"
+#include "components/Button.h"
+#include "components/Thermometer.h"
 #include "components/Blinds.h"
 
 // Same shape as DeviceIQ's mqttclient: connect, publish blind state,
@@ -42,9 +45,13 @@ class mqttclient {
         bool Connect();
         void HandleMessage(const String& topic, const uint8_t* payload, size_t length);
         void PublishDiscovery();
+        void PublishRelayDiscovery(const relay& target);
+        void PublishButtonDiscovery(const button& target);
+        void PublishThermometerDiscovery(const thermometer& target);
         void PublishBlindDiscovery(const blinds& target);
+        void AddDiscoveryMetadata(JsonDocument& doc, const String& name, const String& uniqueId, bool includeAvailability = true);
+        void AddThermometerAvailability(JsonDocument& doc, const String& name);
         void PublishStateIfChanged();
-        void PublishBlindState(const String& name, uint8_t position, const char* state);
         bool Publish(const String& topic, const String& payload, bool retained = false);
         String ComponentTopic(const String& name, const char* direction, const char* property) const;
         String AvailabilityTopic() const;
@@ -71,15 +78,21 @@ class mqttclient {
         unsigned long pLastConnectAttemptMs = 0;
         bool pDiscoveryPending = false;
 
-        // Last state actually published per Blinds component (indexed by
+        // Last state actually published per component (indexed by
         // ComponentManager slot, not ID), so PublishStateIfChanged() only
-        // publishes on an actual change instead of every Loop() call.
-        struct BlindPublishState {
+        // publishes on an actual change instead of every Loop() call. Only
+        // the fields relevant to the slot's actual class are ever read.
+        struct PublishState {
             bool published = false;
-            uint8_t position = 0;
-            blinds::Motion state = blinds::Motion::Stopped;
+            bool relayState = false;
+            bool buttonPressed = false;
+            bool thermometerAvailable = false;
+            float thermometerTemperature = NAN;
+            float thermometerHumidity = NAN;
+            uint8_t blindPosition = 0;
+            blinds::Motion blindState = blinds::Motion::Stopped;
         };
-        BlindPublishState pBlindCache[ComponentManager::MAX_COMPONENTS];
+        PublishState pStateCache[ComponentManager::MAX_COMPONENTS];
 };
 
 extern mqttclient MQTTClient;

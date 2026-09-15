@@ -156,13 +156,19 @@ void setup() {
   Serial.begin(115200);
   Serial.println("Starting " + String(Version::ProductFamily) + "...");
 
+  // Matches DeviceIQ's App::Start(), which does the same before anything
+  // else - without it the clock sits at the Unix epoch (1970) until NTP
+  // syncs, or forever if it's disabled/unreachable.
+  struct timeval InitialTime = { (time_t)Defaults.General.InitialTimeAndDate, 0 };
+  settimeofday(&InitialTime, nullptr);
+
   if(!LittleFS.begin()) {
     Serial.println("Error while mounting LittleFS. Unable to continue.");
     return;
   }
 
   GeneralTimer = new Timer();
-  Settings.Load();
+  bool ConfigurationLoaded = Settings.Load();
 
   // Settings.FactoryReset();
 
@@ -172,6 +178,13 @@ void setup() {
   Logger.Hostname(Settings.Network_Hostname());
   Logger.Endpoint(Settings.Log_Endpoint());
   Logger.Level(Settings.Log_Level());
+
+  // Matches DeviceIQ's own first three boot log lines, once Logger is
+  // configured enough to write them (LittleFS/Settings.Load() above already
+  // succeeded by this point, so both are retroactively "initialized").
+  Logger.Write(Version::Info());
+  Logger.Write("Logger initialized");
+  Logger.Write("FileSystem initialized");
 
   WiFi.mode(WIFI_STA);
   // hostname() only takes effect reliably once STA mode is already set, and
@@ -195,11 +208,10 @@ void setup() {
   }
 
   if(WiFi.status() == WL_CONNECTED) {
-    Logger.Write("Connected to SSID: " + Settings.Network_SSID() + ", IP address: " + WiFi.localIP().toString());
+    Logger.Write("Network: WiFi Client, connected to " + Settings.Network_SSID() + " (Hostname: " + Settings.Network_Hostname() + " | IP: " + WiFi.localIP().toString() + " | MAC: " + WiFi.macAddress() + " | RSSI: " + String(WiFi.RSSI()) + " dBm)");
     Logger.Write("Web UI address: http://" + WiFi.localIP().toString() + ":" + Settings.Network_HTTP_Port() + "/");
 
     if(Settings.General_NTPEnabled()) {
-      Logger.Write("Synchronizing clock via NTP (" + Settings.General_NTPServer() + ")...");
       configTime(Settings.General_TimeZone() * 3600, 0, Settings.General_NTPServer().c_str());
 
       uint8_t NTPRetry = 0;
@@ -210,23 +222,21 @@ void setup() {
         // again - stopping SNTP keeps it that way instead of the lwIP
         // client quietly re-syncing on its own schedule.
         sntp_stop();
-        time_t Now = time(nullptr);
-        String NowStr(ctime(&Now));
-        NowStr.trim();
-        Logger.Write("Clock synchronized: " + NowStr);
+        Logger.Write("Date and time: Updated from NTP server " + Settings.General_NTPServer());
       } else {
-        Logger.Write("Warning: Unable to synchronize clock via NTP.", logger::Warning);
+        Logger.Write("Date and time: NTP update failed using " + Settings.General_NTPServer() + " (attempts: " + String(NTPRetry) + ")", logger::Warning);
       }
+    } else {
+      Logger.Write("Date and time: NTP disabled, using local clock");
     }
   } else if(Settings.Network_FallbackAPEnabled()) {
     String AP_SSID = Settings.Network_FallbackAPSSID().length() ? Settings.Network_FallbackAPSSID() : (String(Version::ProductFamily) + "-" + Settings.Network_Hostname());
-    Logger.Write("Unable to connect to " + Settings.Network_SSID() + " network. Going AP mode SSID " + AP_SSID + ", password '" + Settings.Network_FallbackAPPassword() + "'");
     WiFi.softAP(AP_SSID.c_str(), Settings.Network_FallbackAPPassword().c_str(), 11, 0, 4);
     Settings.AP_Mode(true);
-    Logger.Write("Connected to AP SSID: " + AP_SSID + " | IP address: " + WiFi.softAPIP().toString());
+    Logger.Write("Network: SoftAP active as " + AP_SSID + " (Hostname: " + Settings.Network_Hostname() + " | IP: " + WiFi.softAPIP().toString() + " | MAC: " + WiFi.softAPmacAddress() + ")");
     Logger.Write("Web UI address: http://" + WiFi.softAPIP().toString() + ":" + Settings.Network_HTTP_Port() + "/");
   } else {
-    Logger.Write("Unable to connect to " + Settings.Network_SSID() + " network. Fallback AP is disabled.", logger::Warning);
+    Logger.Write("Network status: Offline (unable to connect to " + Settings.Network_SSID() + "; fallback AP disabled)", logger::Warning);
   }
 
   MDNS.begin(Settings.Network_Hostname());
@@ -489,69 +499,6 @@ void setup() {
     // Logged after clearing: if File is one of the active log endpoints,
     // this becomes the first entry of the fresh log.
     Logger.Write("Web Server: log clear accepted for " + session->Username + "@" + ClientIP(request));
-  });
-
-  // Array-based and ID-addressed, unlike the old fixed left/right fields -
-  // any number of Blinds components can be registered from config.json.
-  // Not admin-gated: operating the blinds is this device's everyday
-  // function, not device configuration (same rationale as before).
-  Webserver->on("/api/blinds", HTTP_GET, [](AsyncWebServerRequest *request) {
-    WebSession *session = AuthenticatedSession(request);
-    if(!session) { request->send(401, "application/json", "{\"error\":\"unauthenticated\"}"); return; }
-
-    auto appendBlind = [](JsonObject entry, const blinds& target) {
-      entry["id"] = target.ID();
-      entry["name"] = target.Name();
-      entry["state"] = blinds::StateName(target.State());
-      entry["position"] = target.Position();
-      entry["targetPosition"] = target.TargetPosition();
-      entry["stepTimeMs"] = target.StepTime();
-    };
-
-    if(!request->hasParam("id")) {
-      JsonDocument doc;
-      JsonArray items = doc["blinds"].to<JsonArray>();
-      for(size_t i = 0; i < Components.Count(); i++) {
-        component *item = Components.At(i);
-        if(item != nullptr && item->IsPublic() && item->Class() == component::Classes::Blinds) {
-          appendBlind(items.add<JsonObject>(), static_cast<const blinds&>(*item));
-        }
-      }
-
-      AsyncResponseStream *response = request->beginResponseStream("application/json");
-      serializeJson(doc, *response);
-      request->send(response);
-      return;
-    }
-
-    int16_t id = (int16_t)request->getParam("id")->value().toInt();
-    component *found = Components.FindByID(id);
-    if(found == nullptr || found->Class() != component::Classes::Blinds) {
-      request->send(404, "application/json", "{\"error\":\"blind not found\"}");
-      return;
-    }
-    blinds &target = static_cast<blinds&>(*found);
-
-    if(request->hasParam("state")) {
-      String value = request->getParam("state")->value();
-      if(value == "open") target.Open();
-      else if(value == "close") target.Close();
-      else if(value == "stop") target.Stop();
-      else { request->send(422, "application/json", "{\"error\":\"invalid state\"}"); return; }
-      Logger.Write("Web Server: component set accepted for " + session->Username + "@" + ClientIP(request) + ": " + target.Name() + ".state=" + value);
-    } else if(request->hasParam("position")) {
-      String value = request->getParam("position")->value();
-      int position = value.toInt();
-      if(position < 0 || position > blinds::MAX_POSITION) { request->send(422, "application/json", "{\"error\":\"invalid position\"}"); return; }
-      target.SetPosition((uint8_t)position);
-      Logger.Write("Web Server: component set accepted for " + session->Username + "@" + ClientIP(request) + ": " + target.Name() + ".position=" + value);
-    }
-
-    JsonDocument doc;
-    appendBlind(doc.to<JsonObject>(), target);
-    AsyncResponseStream *response = request->beginResponseStream("application/json");
-    serializeJson(doc, *response);
-    request->send(response);
   });
 
   // These four routes must be registered before the plain "/api/components"
@@ -1285,6 +1232,9 @@ void setup() {
 
   MQTTClient.Start();
   WebhookServer.Start();
+
+  if(ConfigurationLoaded) Logger.Write("Configuration initialized - file " + String(CONFIG_FILE_NAME) + " read");
+  else Logger.Write("Configuration initialized with defaults - file " + String(CONFIG_FILE_NAME) + " not loaded", logger::Warning);
 
   Logger.Write("Ready!");
 }
