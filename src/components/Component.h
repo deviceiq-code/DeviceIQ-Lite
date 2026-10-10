@@ -8,7 +8,7 @@
 // threading model Lite already relied on before this existed).
 class component {
     public:
-        enum class Classes : uint8_t { Base, Relay, Button, Thermometer, Blinds };
+        enum class Classes : uint8_t { Base, Relay, Button, Thermometer, Blinds, DoorBell };
 
         // Address is a GPIO pin number for Relay/Button/Thermometer, and
         // unused (0) for Blinds - there is no "Bus" concept in Lite, since

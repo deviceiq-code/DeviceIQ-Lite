@@ -18,6 +18,7 @@
 #include "components/Button.h"
 #include "components/Thermometer.h"
 #include "components/Blinds.h"
+#include "components/DoorBell.h"
 
 AsyncWebServer *Webserver;
 Timer *GeneralTimer;
@@ -690,6 +691,9 @@ void setup() {
         entry["buttonOpenEnabled"] = b.ButtonOpenEnabled();
         entry["buttonCloseEnabled"] = b.ButtonCloseEnabled();
         entry["invertButtons"] = b.InvertButtons();
+      } else if(item->Class() == component::Classes::DoorBell) {
+        entry["address"] = item->Address();
+        entry["pressed"] = static_cast<const doorbell&>(*item).IsPressed();
       }
     }
 

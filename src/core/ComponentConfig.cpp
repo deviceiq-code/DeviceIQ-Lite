@@ -8,6 +8,7 @@
 #include "components/Button.h"
 #include "components/Thermometer.h"
 #include "components/Blinds.h"
+#include "components/DoorBell.h"
 
 namespace {
     constexpr uint8_t ComponentSchemaVersion = 1;
@@ -168,6 +169,57 @@ namespace {
         if(!ReadOptionalUint32(setup, "DebounceTimeMs", result.debounceTimeMs) ||
            !ReadOptionalUint32(setup, "LongClickTimeMs", result.longClickTimeMs) ||
            !ReadOptionalUint32(setup, "MultiClickTimeMs", result.multiClickTimeMs)) return false;
+
+        JsonObjectConst properties = ComponentProperties(object);
+        if(!properties["Enabled"].isNull()) {
+            if(!properties["Enabled"].is<bool>()) return false;
+            result.enabled = properties["Enabled"].as<bool>();
+        }
+
+        return true;
+    }
+
+    struct DoorBellConfig {
+        String name;
+        int16_t id = 0;
+        uint8_t address = 0;
+        doorbell::ActiveLevels activeLevel = doorbell::ActiveLevels::Low;
+        doorbell::InputModes inputMode = doorbell::InputModes::PullUp;
+        uint32_t debounceTimeMs = doorbell::DEFAULT_DEBOUNCE_TIME_MS;
+        bool enabled = true;
+    };
+
+    bool ParseDoorBellConfig(JsonObjectConst object, int16_t id, DoorBellConfig& result) {
+        JsonObjectConst setup = ComponentSetup(object);
+        if(!setup["Name"].is<const char*>() || !setup["Address"].is<int>()) return false;
+
+        result.name = setup["Name"].as<const char*>();
+        result.name.trim();
+        if(result.name.isEmpty()) return false;
+
+        int address = setup["Address"].as<int>();
+        if(!ValidGPIOPin(address)) return false;
+        result.id = id;
+        result.address = (uint8_t)address;
+
+        if(!setup["ActiveLevel"].isNull()) {
+            if(!setup["ActiveLevel"].is<const char*>()) return false;
+            String activeLevel = setup["ActiveLevel"].as<const char*>();
+            if(activeLevel.equalsIgnoreCase("High")) result.activeLevel = doorbell::ActiveLevels::High;
+            else if(activeLevel.equalsIgnoreCase("Low")) result.activeLevel = doorbell::ActiveLevels::Low;
+            else return false;
+        }
+
+        if(!setup["InputMode"].isNull()) {
+            if(!setup["InputMode"].is<const char*>()) return false;
+            String inputMode = setup["InputMode"].as<const char*>();
+            if(inputMode.equalsIgnoreCase("Floating")) result.inputMode = doorbell::InputModes::Floating;
+            else if(inputMode.equalsIgnoreCase("PullUp")) result.inputMode = doorbell::InputModes::PullUp;
+            else if(inputMode.equalsIgnoreCase("PullDown")) result.inputMode = doorbell::InputModes::PullDown;
+            else return false;
+        }
+
+        if(!ReadOptionalUint32(setup, "DebounceTimeMs", result.debounceTimeMs)) return false;
 
         JsonObjectConst properties = ComponentProperties(object);
         if(!properties["Enabled"].isNull()) {
@@ -352,6 +404,10 @@ namespace {
                 ThermometerConfig config;
                 if(!ParseThermometerConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Thermometer configuration"; return false; }
                 identities[count] = {config.name, config.id, config.address, component::Classes::Thermometer, true};
+            } else if(componentClass.equalsIgnoreCase("DoorBell")) {
+                DoorBellConfig config;
+                if(!ParseDoorBellConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid DoorBell configuration"; return false; }
+                identities[count] = {config.name, config.id, config.address, component::Classes::DoorBell, true};
             } else if(componentClass.equalsIgnoreCase("Blinds")) {
                 BlindsConfig config;
                 if(!ParseBlindsConfig(object, configuredID, config)) { error = "component #" + String(configuredID) + ": invalid Blinds configuration"; return false; }
@@ -494,6 +550,10 @@ bool settings::InstallComponents(const String& ConfigFileName) {
             ThermometerConfig config;
             ParseThermometerConfig(object, configuredID, config);
             instances[index].reset(new (std::nothrow) thermometer(config.name, config.id, config.address, config.type, config.pollingIntervalMs, config.enabled));
+        } else if(componentClass.equalsIgnoreCase("DoorBell")) {
+            DoorBellConfig config;
+            ParseDoorBellConfig(object, configuredID, config);
+            instances[index].reset(new (std::nothrow) doorbell(config.name, config.id, config.address, config.activeLevel, config.inputMode, config.debounceTimeMs, config.enabled));
         }
 
         if(!componentClass.equalsIgnoreCase("Blinds") && !instances[index]) {
@@ -716,7 +776,8 @@ bool settings::SetComponentProperty(int16_t ID, const String& Property, const St
 // live ComponentManager, so a restart is required to apply it.
 bool settings::AddComponent(const String& ClassName, const String& Name, int Address, int16_t RelayOpen, int16_t RelayClose, int16_t& NewID, String& Error) {
     if(!ClassName.equalsIgnoreCase("Relay") && !ClassName.equalsIgnoreCase("Button") &&
-       !ClassName.equalsIgnoreCase("Thermometer") && !ClassName.equalsIgnoreCase("Blinds")) {
+       !ClassName.equalsIgnoreCase("Thermometer") && !ClassName.equalsIgnoreCase("Blinds") &&
+       !ClassName.equalsIgnoreCase("DoorBell")) {
         Error = "unsupported component class";
         return false;
     }
@@ -826,6 +887,11 @@ bool settings::UpdateComponent(int16_t ID, JsonObjectConst Fields, String& Error
         if(has("address")) setup["Address"] = text("address").toInt();
         if(has("type")) setup["Type"] = text("type");
         if(has("pollingintervalms")) setup["PollingIntervalMs"] = (uint32_t)text("pollingintervalms").toInt();
+    } else if(componentClass.equalsIgnoreCase("DoorBell")) {
+        if(has("address")) setup["Address"] = text("address").toInt();
+        if(has("activelevel")) setup["ActiveLevel"] = text("activelevel");
+        if(has("inputmode")) setup["InputMode"] = text("inputmode");
+        if(has("debouncetimems")) setup["DebounceTimeMs"] = (uint32_t)text("debouncetimems").toInt();
     } else if(componentClass.equalsIgnoreCase("Blinds")) {
         if(has("relayopen")) setup["RelayOpen"] = text("relayopen").toInt();
         if(has("relayclose")) setup["RelayClose"] = text("relayclose").toInt();

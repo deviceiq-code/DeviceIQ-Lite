@@ -9,11 +9,14 @@
 #include "components/Button.h"
 #include "components/Thermometer.h"
 #include "components/Blinds.h"
+#include "components/DoorBell.h"
 
 // Same shape as DeviceIQ's mqttclient: connect, publish component state,
 // publish Home Assistant MQTT discovery per component (Relay as a "switch",
 // Button as a "binary_sensor", Thermometer as "sensor", Blinds as a
-// "cover"), and accept Set commands back. What's different is entirely about
+// "cover", DoorBell as an "event" with device_class "doorbell" - the entity
+// type HA's own HomeKit Bridge maps to a native Doorbell accessory), and
+// accept Set commands back. What's different is entirely about
 // the platform, not the protocol: DeviceIQ runs this from its own FreeRTOS
 // task with event queues; the ESP8266 here has neither, so Loop() is
 // called from the sketch's own loop() instead, and state changes are
@@ -50,6 +53,7 @@ class mqttclient {
         void PublishButtonDiscovery(const button& target);
         void PublishThermometerDiscovery(const thermometer& target);
         void PublishBlindDiscovery(const blinds& target);
+        void PublishDoorBellDiscovery(const doorbell& target);
         void AddDiscoveryMetadata(JsonDocument& doc, const String& name, const String& uniqueId, bool includeAvailability = true);
         void AddThermometerAvailability(JsonDocument& doc, const String& name);
         void PublishStateIfChanged();

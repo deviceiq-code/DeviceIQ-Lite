@@ -42,6 +42,7 @@ const char* component::ClassName(Classes value) {
         case Classes::Button: return "Button";
         case Classes::Thermometer: return "Thermometer";
         case Classes::Blinds: return "Blinds";
+        case Classes::DoorBell: return "DoorBell";
         default: return "Base";
     }
 }

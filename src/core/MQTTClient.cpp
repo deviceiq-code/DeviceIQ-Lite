@@ -193,6 +193,16 @@ void mqttclient::PublishStateIfChanged() {
                 cache.blindState = state;
                 cache.published = true;
             }
+        } else if(item->Class() == component::Classes::DoorBell) {
+            // Edge-triggered, not level-compared like the classes above: a
+            // press is a momentary HA "event" entity, not a persisted
+            // state, so it's published unretained exactly once per debounced
+            // press (WasPressed() is only true for the single Control() tick
+            // right after the edge, and this runs once per that same tick).
+            const doorbell& target = static_cast<const doorbell&>(*item);
+            if(target.WasPressed()) {
+                Publish(ComponentTopic(target.Name(), "Get", "event"), "{\"event_type\":\"press\"}", false);
+            }
         }
     }
 }
@@ -208,6 +218,7 @@ void mqttclient::PublishDiscovery() {
         else if(item->Class() == component::Classes::Button) PublishButtonDiscovery(static_cast<const button&>(*item));
         else if(item->Class() == component::Classes::Thermometer) PublishThermometerDiscovery(static_cast<const thermometer&>(*item));
         else if(item->Class() == component::Classes::Blinds) PublishBlindDiscovery(static_cast<const blinds&>(*item));
+        else if(item->Class() == component::Classes::DoorBell) PublishDoorBellDiscovery(static_cast<const doorbell&>(*item));
     }
 }
 
@@ -336,6 +347,29 @@ void mqttclient::PublishBlindDiscovery(const blinds& target) {
 
     String payload;
     if(serializeJson(doc, payload) > 0) Publish(pDiscoveryPrefix + "/cover/" + unique + "/config", payload, true);
+}
+
+// HA's "event" platform: unlike the other classes, there is no retained
+// level to compare against - the entity just reports the timestamp of the
+// most recent message on stat_t as its state, decoded via evt_typ/the
+// default "event_type" JSON key (see PublishStateIfChanged()). device_class
+// "doorbell" is what makes HA's own HomeKit Bridge integration surface this
+// as a native HomeKit Doorbell accessory (push notification / HomePod
+// chime) - no camera/linked_doorbell_sensor needed, unlike the older
+// video-doorbell pairing.
+void mqttclient::PublishDoorBellDiscovery(const doorbell& target) {
+    const String& name = target.Name();
+    String unique = UniqueID("doorbell" + String(target.ID()) + "_event");
+
+    JsonDocument doc;
+    AddDiscoveryMetadata(doc, name, unique);
+    doc["dev_cla"] = "doorbell";
+    doc["stat_t"] = ComponentTopic(name, "Get", "event");
+    JsonArray eventTypes = doc["evt_typ"].to<JsonArray>();
+    eventTypes.add("press");
+
+    String payload;
+    if(serializeJson(doc, payload) > 0) Publish(pDiscoveryPrefix + "/event/" + unique + "/config", payload, true);
 }
 
 bool mqttclient::Publish(const String& topic, const String& payload, bool retained) {
